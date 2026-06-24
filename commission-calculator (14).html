@@ -1,0 +1,2007 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Commission Calculator</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<!-- Firebase SDKs -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script>
+// ── FIREBASE INIT ─────────────────────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyAgoYWATaWWt51GDydf94O8KV4d7SOH9YM",
+  authDomain: "commission-calculator-57d7f.firebaseapp.com",
+  projectId: "commission-calculator-57d7f",
+  storageBucket: "commission-calculator-57d7f.firebasestorage.app",
+  messagingSenderId: "997078847139",
+  appId: "1:997078847139:web:88d3c3ed860175fad67916"
+};
+firebase.initializeApp(firebaseConfig);
+var _auth = firebase.auth();
+var _db   = firebase.firestore();
+
+// Admin UID — set after first login, stored here for role checks
+var ADMIN_EMAIL = 'mazhar@wpsgroup.ae'; // ← UPDATE THIS to your email
+
+// ── CURRENT USER STATE ────────────────────────────────────────────────────────
+window._currentUser = null;
+window._isAdmin     = false;
+window._advisorName = null; // matched advisor name for non-admin
+
+// ── FIREBASE-BACKED STORE (replaces lsStore) ──────────────────────────────────
+// All data lives under Firestore /shared/settings and /shared/periods/{key}
+// Admin reads/writes everything; advisors read only their own period slices
+function fbStore(ns){
+  var COLL = 'shared';
+  var DOC  = ns; // 'comm_settings_v1' or 'comm_periods_v1'
+  return {
+    save: async function(id, data){
+      var ref = _db.collection(COLL).doc(DOC);
+      await ref.set({[id]: JSON.stringify(data)}, {merge: true});
+    },
+    del: async function(id){
+      var ref = _db.collection(COLL).doc(DOC);
+      await ref.update({[id]: firebase.firestore.FieldValue.delete()});
+    },
+    setVal: async function(val){
+      var ref = _db.collection(COLL).doc(DOC);
+      await ref.set({__val: JSON.stringify(val)});
+    },
+    getAll: async function(){
+      var ref = _db.collection(COLL).doc(DOC);
+      var snap = await ref.get();
+      if(!snap.exists) return null;
+      var raw = snap.data();
+      // If stored as __val (settings), return parsed value
+      if(raw.__val !== undefined){
+        try{ return JSON.parse(raw.__val); }catch(e){ return null; }
+      }
+      // Otherwise return as object with parsed values (periods)
+      var out = {};
+      Object.keys(raw).forEach(function(k){
+        try{ out[k] = JSON.parse(raw[k]); }catch(e){}
+      });
+      return Object.keys(out).length ? out : null;
+    }
+  };
+}
+window._comm = {
+  settings: fbStore('comm_settings_v1'),
+  periods:  fbStore('comm_periods_v1')
+};
+window._fbReady = true;
+</script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+:root{
+  --bg:#F0F2F5;--surf:#FFFFFF;--surf2:#F5F7FA;--brd:#D8DEE9;--brd2:#C4CDD9;
+  --tx:#1A2B45;--tx2:#4A5E78;--tx3:#8A9BB0;
+  --blue:#1A5FAF;--bluebg:rgba(26,95,175,.1);--bluetx:#1A5FAF;
+  --green:#0F8A5F;--greenbg:rgba(15,138,95,.1);--greentx:#0A6B48;
+  --amber:#B86800;--amberbg:rgba(184,104,0,.1);--ambertx:#B86800;
+  --red:#C0392B;--redbg:rgba(192,57,43,.1);--redtx:#C0392B;
+  --purp:#4A5FA8;--purpbg:rgba(74,95,168,.1);--purptx:#4A5FA8;
+  --r:10px;--rs:7px;
+}
+body{font-family:"DM Sans",sans-serif;background:var(--bg);color:var(--tx);min-height:100vh;}
+.app{display:flex;min-height:100vh;}
+.sidebar{width:200px;background:#1A2B45;border-right:1px solid #0F1E33;position:fixed;top:0;left:0;height:100vh;display:flex;flex-direction:column;z-index:10;}
+.sb-top{padding:14px 12px 10px;border-bottom:1px solid rgba(255,255,255,.08);}
+.sb-title{font-size:14px;font-weight:700;}
+.sb-sub{font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:.06em;margin-top:2px;}
+.sb-nav{padding:7px 5px;flex:1;overflow-y:auto;}
+.nlbl{font-size:9px;font-weight:600;color:rgba(255,255,255,.35);text-transform:uppercase;letter-spacing:.1em;padding:0 7px;margin:8px 0 2px;}
+.ni{display:flex;align-items:center;gap:7px;padding:7px 9px;border-radius:var(--rs);cursor:pointer;font-size:12px;color:rgba(255,255,255,.6);margin-bottom:1px;background:none;border:1px solid transparent;width:100%;text-align:left;font-family:"DM Sans",sans-serif;font-weight:500;transition:all .12s;}
+.ni:hover{background:rgba(255,255,255,.1);color:#fff;}
+.ni.active{background:rgba(255,255,255,.15);color:#fff;border-color:rgba(255,255,255,.2);}
+.ni svg{width:14px;height:14px;flex-shrink:0;}
+.main{margin-left:200px;flex:1;}
+.topbar{background:#FFFFFF;border-bottom:1px solid var(--brd);padding:10px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:9;box-shadow:0 1px 4px rgba(0,0,0,.08);}
+.topbar-title{font-size:15px;font-weight:700;}
+.content{padding:18px 20px;}
+.btn{display:inline-flex;align-items:center;gap:5px;padding:7px 13px;border-radius:var(--rs);font-size:12px;font-weight:600;cursor:pointer;border:1px solid transparent;font-family:"DM Sans",sans-serif;transition:all .12s;}
+.btn-p{background:linear-gradient(135deg,#1A5FAF,#0F4080);color:#fff;border:none;box-shadow:0 2px 8px rgba(26,95,175,.25);}
+.btn-p:hover{opacity:.9;}
+.btn-g{background:transparent;border-color:var(--brd2);color:var(--tx2);}
+.btn-g:hover{background:var(--surf2);color:var(--tx);}
+.btn-red{background:transparent;border-color:rgba(248,113,113,.3);color:var(--red);}
+.btn-red:hover{background:var(--redbg);}
+.btn-sm{padding:4px 10px;font-size:11px;}
+.btn-xs{padding:3px 8px;font-size:10px;}
+.card{background:#FFFFFF;border:1px solid var(--brd);border-radius:var(--r);padding:14px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.06);}
+.card-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:7px;}
+.card-title{font-size:13px;font-weight:700;}
+/* Table */
+.tbl-wrap{overflow-x:auto;}
+table{width:100%;border-collapse:collapse;}
+thead th{font-size:10px;font-weight:600;color:#4A5E78;text-transform:uppercase;letter-spacing:.05em;padding:7px 8px;background:#EBF0F8;border-bottom:1px solid var(--brd);text-align:left;white-space:nowrap;}
+tbody td{padding:4px 6px;border-bottom:1px solid var(--brd);vertical-align:middle;font-size:12px;}
+tbody tr:last-child td{border-bottom:none;}
+tbody tr:hover td{background:rgba(108,142,255,.03);}
+/* Inline inputs */
+.ti{padding:5px 6px;border:1px solid var(--brd);border-radius:5px;font-size:11px;font-family:"DM Sans",sans-serif;background:#fff;color:var(--tx);outline:none;transition:border-color .12s;-webkit-user-select:text;user-select:text;}
+.ti:focus{border-color:var(--blue);box-shadow:0 0 0 2px rgba(108,142,255,.15);}
+.ti-n{font-family:"DM Mono",monospace;text-align:right;}
+/* Provider combo */
+.combo-wrap{position:relative;display:inline-block;}
+.combo-wrap input{width:100%;padding-right:22px;}
+.combo-list{position:absolute;top:100%;left:0;right:0;background:var(--surf);border:1px solid var(--blue);border-radius:var(--rs);z-index:100;max-height:180px;overflow-y:auto;display:none;}
+.combo-list.show{display:block;}
+.combo-item{padding:6px 10px;font-size:12px;cursor:pointer;color:var(--tx);}
+.combo-item:hover{background:var(--bluebg);color:var(--bluetx);}
+/* Period bar */
+.pbar{background:#fff;border:1px solid var(--brd);border-radius:var(--r);padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:9px;flex-wrap:wrap;box-shadow:0 1px 4px rgba(0,0,0,.06);}
+.pt{padding:4px 12px;border-radius:20px;cursor:pointer;border:1px solid var(--brd);font-size:11px;font-weight:600;color:var(--tx2);background:#fff;font-family:"DM Sans",sans-serif;transition:all .12s;}
+.pt.on{background:linear-gradient(135deg,#1A5FAF,#0F4080);color:#fff;border-color:transparent;box-shadow:0 2px 6px rgba(26,95,175,.3);}
+.inp{padding:6px 9px;border:1px solid var(--brd);border-radius:var(--rs);font-size:12px;font-family:"DM Sans",sans-serif;background:var(--surf2);color:var(--tx);outline:none;}
+.inp:focus{border-color:var(--blue);}
+/* Badges */
+.badge{display:inline-flex;align-items:center;font-size:10px;font-weight:600;padding:2px 7px;border-radius:20px;}
+.b-blue{background:var(--bluebg);color:var(--bluetx);}
+.b-green{background:var(--greenbg);color:var(--greentx);}
+.b-amber{background:var(--amberbg);color:var(--ambertx);}
+.b-red{background:var(--redbg);color:var(--redtx);}
+.b-purp{background:var(--purpbg);color:var(--purptx);}
+.b-gray{background:var(--surf2);color:var(--tx3);}
+.mono{font-family:"DM Mono",monospace;}
+.pos{color:var(--greentx);}
+.neg{color:var(--redtx);}
+.hint{font-size:10px;color:var(--tx3);}
+/* Summary table */
+.sum-tbl{width:100%;border-collapse:collapse;font-size:11px;}
+.sum-tbl th{background:#1A2B45;padding:7px 8px;border:1px solid #0F1E33;font-size:9px;font-weight:700;color:#90B8D8;text-transform:uppercase;letter-spacing:.05em;text-align:center;white-space:nowrap;}
+.sum-tbl th.left{text-align:left;}
+.sum-tbl td{padding:6px 8px;border:1px solid var(--brd);vertical-align:middle;white-space:nowrap;}
+.sum-tbl tr:hover td{background:rgba(108,142,255,.04);}
+.sum-tbl .ded-inp{width:80px;padding:3px 5px;border:1px solid var(--brd);border-radius:4px;background:var(--surf2);color:var(--tx);font-family:"DM Mono",monospace;font-size:11px;text-align:right;outline:none;}
+.sum-tbl .ded-inp:focus{border-color:var(--blue);}
+.sum-tbl .status-inp{width:110px;padding:3px 6px;border:1px solid var(--brd);border-radius:4px;background:var(--surf2);color:var(--tx);font-size:11px;outline:none;}
+/* FX box */
+.fx-box{background:#fff;border:1px solid var(--brd);border-radius:var(--r);padding:14px 16px;margin-top:12px;box-shadow:0 1px 4px rgba(0,0,0,.06);}
+.fx-box h3{font-size:12px;font-weight:700;margin-bottom:10px;color:var(--bluetx);}
+.fx-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;}
+/* History */
+.hist-item{background:#fff;border:1px solid var(--brd);border-radius:var(--rs);padding:10px 14px;margin-bottom:7px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;transition:all .15s;box-shadow:0 1px 3px rgba(0,0,0,.05);}
+.hist-item:hover{border-color:var(--blue);box-shadow:0 2px 8px rgba(26,95,175,.12);}
+/* Settings adv card */
+.adv-set-card{background:var(--surf2);border:1px solid var(--brd);border-radius:var(--r);padding:14px;margin-bottom:10px;}
+/* Connect */
+.connecting{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;gap:12px;color:var(--tx2);background:var(--bg);}
+.spinner{width:30px;height:30px;border:2px solid var(--brd);border-top-color:var(--blue);border-radius:50%;animation:spin .7s linear infinite;}
+.admin-only{display:none;} /* shown via JS after auth confirms admin role */
+@keyframes spin{to{transform:rotate(360deg)}}
+.toasts{position:fixed;bottom:14px;right:14px;z-index:200;display:flex;flex-direction:column;gap:5px;}
+.toast{background:var(--surf);border:1px solid var(--brd);color:var(--tx);padding:8px 13px;border-radius:var(--rs);font-size:12px;opacity:0;transform:translateY(4px);transition:all .2s;box-shadow:0 4px 14px rgba(0,0,0,.4);}
+.toast.show{opacity:1;transform:translateY(0);}
+.toast.ok{background:var(--greenbg);border-color:rgba(52,211,153,.3);color:var(--greentx);}
+.toast.err{background:var(--redbg);border-color:rgba(248,113,113,.3);color:var(--redtx);}
+.lm-pill{font-size:9px;font-weight:700;background:var(--purpbg);color:var(--purptx);padding:1px 5px;border-radius:3px;margin-left:3px;}
+</style>
+</head>
+<body>
+<!-- ── LOGIN SCREEN ─────────────────────────────────────────────────────────── -->
+<div id="login-screen" style="display:none;position:fixed;inset:0;background:linear-gradient(135deg,#0d1a2e 0%,#1A2B45 60%,#1a4a7a 100%);display:flex;align-items:center;justify-content:center;z-index:9999;">
+  <div style="background:#fff;border-radius:16px;padding:40px 36px;width:360px;box-shadow:0 24px 60px rgba(0,0,0,.4);">
+    <div style="text-align:center;margin-bottom:28px;">
+      <div style="font-size:28px;font-weight:800;color:#1A2B45;letter-spacing:-.5px;">Commission</div>
+      <div style="font-size:13px;color:#8A9BB0;margin-top:3px;font-weight:500;">WPS Group · Secure Login</div>
+    </div>
+    <div id="login-err" style="display:none;background:#FEE;border:1px solid #F5C6CB;border-radius:8px;padding:10px 14px;font-size:12px;color:#C0392B;margin-bottom:16px;"></div>
+    <div style="margin-bottom:14px;">
+      <label style="font-size:11px;font-weight:600;color:#4A5E78;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:5px;">Email</label>
+      <input id="login-email" type="email" placeholder="your@email.com" autocomplete="email"
+        style="width:100%;padding:11px 14px;border:1.5px solid #D8DEE9;border-radius:8px;font-size:14px;font-family:inherit;outline:none;transition:border .2s;"
+        onfocus="this.style.borderColor='#1A5FAF'" onblur="this.style.borderColor='#D8DEE9'"
+        onkeydown="if(event.key==='Enter')document.getElementById('login-pass').focus()">
+    </div>
+    <div style="margin-bottom:22px;">
+      <label style="font-size:11px;font-weight:600;color:#4A5E78;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:5px;">Password</label>
+      <input id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password"
+        style="width:100%;padding:11px 14px;border:1.5px solid #D8DEE9;border-radius:8px;font-size:14px;font-family:inherit;outline:none;transition:border .2s;"
+        onfocus="this.style.borderColor='#1A5FAF'" onblur="this.style.borderColor='#D8DEE9'"
+        onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <button onclick="doLogin()" id="login-btn"
+      style="width:100%;padding:13px;background:#1A2B45;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;transition:background .2s;"
+      onmouseover="this.style.background='#1A5FAF'" onmouseout="this.style.background='#1A2B45'">
+      Sign In
+    </button>
+    <div style="text-align:center;margin-top:16px;">
+      <a href="#" onclick="doReset();return false;" style="font-size:12px;color:#8A9BB0;text-decoration:none;">Forgot password?</a>
+    </div>
+  </div>
+</div>
+<div id="connecting" class="connecting"><div class="spinner"></div><span>Connecting…</span></div>
+<div id="app" class="app" style="display:none;">
+<aside class="sidebar">
+  <div class="sb-top"><div class="sb-title" style="color:#fff;font-size:15px;font-weight:700;">&#x1F4B9; Commission</div><div class="sb-sub" style="color:rgba(255,255,255,.4);letter-spacing:.1em;">CALCULATOR</div></div>
+  <nav class="sb-nav">
+    <div class="nlbl admin-only">Work</div>
+    <button class="ni active admin-only" id="nv-entry" onclick="V('entry')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New Period</button>
+    <button class="ni admin-only" id="nv-summary" onclick="V('summary')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>Summary</button>
+    <button class="ni admin-only" id="nv-history" onclick="V('history')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>History</button>
+    <button class="ni" id="nv-report" onclick="V('report')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>Advisor Report</button>
+    <div class="nlbl admin-only">Setup</div>
+    <button class="ni admin-only" id="nv-settings" onclick="V('settings')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Advisor Settings</button>
+    <div class="nlbl admin-only">Backup</div>
+    <button class="ni admin-only" onclick="exportAllData()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export Data</button>
+    <button class="ni admin-only" onclick="$('import-file').click()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Import Data</button>
+    <input type="file" id="import-file" accept=".json" style="display:none;" onchange="importAllData(this)">
+  </nav>
+  <div style="margin-top:auto;padding:14px 12px;border-top:1px solid rgba(255,255,255,.08);">
+    <div id="sb-user-name" style="font-size:11px;font-weight:600;color:rgba(255,255,255,.7);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
+    <div id="sb-user-email" style="font-size:10px;color:rgba(255,255,255,.35);margin-bottom:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
+    <button onclick="doLogout()" style="width:100%;padding:7px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:6px;color:rgba(255,255,255,.6);font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;" onmouseover="this.style.background='rgba(255,255,255,.18)'" onmouseout="this.style.background='rgba(255,255,255,.08)'">Sign Out</button>
+  </div>
+</aside>
+<div class="main">
+  <div class="topbar"><div class="topbar-title" id="ttitle" style="color:#1A2B45;">New Period</div><div id="tbar-r" style="display:flex;gap:7px;"></div></div>
+  <div class="content">
+
+    <!-- ═══ ENTRY ═══ -->
+    <div id="view-entry">
+      <div class="pbar">
+        <span style="font-size:12px;font-weight:600;color:var(--tx2);">Period:</span>
+        <button class="pt on" id="pt-1" onclick="setHalf('1st')">1st Half (26–10)</button>
+        <button class="pt" id="pt-2" onclick="setHalf('2nd')">2nd Half (11–25)</button>
+        <select id="p-month" class="inp" style="width:110px;"><option>January</option><option>February</option><option>March</option><option>April</option><option>May</option><option  selected>June</option><option>July</option><option>August</option><option>September</option><option>October</option><option>November</option><option>December</option></select>
+        <input type="number" id="p-year" class="inp" style="width:72px;" value="2026">
+        <div style="margin-left:auto;display:flex;gap:7px;">
+          <button class="btn btn-g btn-sm" onclick="exportExcel()">&#x2193; Excel</button>
+          <button class="btn btn-p btn-sm" onclick="savePeriod()">&#x1F4BE; Save Period</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hdr">
+          <span class="card-title">Commission Rows</span>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="hint">LM % auto = cap − rate &nbsp;|&nbsp; BDM is manual per row</span>
+            <button class="btn btn-p btn-sm" onclick="addRow()">+ Add Row</button>
+          </div>
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr>
+              <th>#</th><th>Date</th><th>Client</th><th>Advisor</th><th>Provider</th><th>Type</th>
+              <th>Ccy</th><th>Received</th><th>Rate%</th><th>Gross</th>
+              <th>BDM</th><th>BDM%</th><th>BDM Amt</th>
+              <th>LM</th><th>LM%</th><th>LM Amt</th>
+              <th>Net</th><th></th>
+            </tr></thead>
+            <tbody id="rows-body"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hdr"><span class="card-title">Totals by Advisor</span></div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>Advisor</th><th>Gross USD</th><th>Gross GBP</th><th>Gross EUR</th><th>Gross AED</th><th>BDM USD</th><th>BDM GBP</th><th>LM USD</th><th>LM GBP</th><th>Net USD</th><th>Net GBP</th><th>Net EUR</th><th>Net AED</th></tr></thead>
+          <tbody id="totals-body"></tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <!-- ═══ SUMMARY ═══ -->
+    <div id="view-summary" style="display:none;">
+      <div style="display:flex;gap:9px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
+        <select id="sum-sel" class="inp" style="width:240px;" onchange="loadSummary()"><option value="">— Select saved period —</option></select>
+        <button class="btn btn-g btn-sm" onclick="exportSummaryExcel()">&#x1F4CA; Excel</button>
+        <button class="btn btn-p btn-sm" onclick="exportSummaryPDF()">&#x1F5A8; PDF</button>
+        <button class="btn btn-p btn-sm" onclick="saveSummaryDeds()">&#x1F4BE; Save deductions</button>
+      </div>
+      <div id="sum-content"><span class="hint">Select a period above to view summary.</span></div>
+      <!-- FX Converter -->
+      <div class="fx-box" id="fx-box" style="display:none;">
+        <h3>&#x1F4B1; Currency Converter</h3>
+        <div class="fx-row">
+          <input type="number" id="fx-amt" class="inp" style="width:120px;" placeholder="Amount">
+          <select id="fx-from" class="inp" style="width:80px;"><option>USD</option><option>GBP</option><option>EUR</option><option>AED</option></select>
+          <span style="color:var(--tx3);">→</span>
+          <select id="fx-to" class="inp" style="width:80px;"><option>GBP</option><option>USD</option><option>EUR</option><option>AED</option></select>
+          <input type="number" id="fx-rate" class="inp" style="width:110px;" placeholder="Exchange rate">
+          <button class="btn btn-p btn-sm" onclick="doFX()">Convert</button>
+        </div>
+        <div id="fx-result" style="font-size:13px;font-weight:600;color:var(--greentx);margin-top:4px;"></div>
+        <div class="hint" style="margin-top:5px;">Enter today's rate manually (e.g. 1 GBP = 1.27 USD). Use for converting balances or negative amounts.</div>
+      </div>
+    </div>
+
+    <!-- ═══ HISTORY ═══ -->
+    <div id="view-history" style="display:none;"><div id="hist-list"><span class="hint">No saved periods yet.</span></div></div>
+
+    <!-- ═══ ADVISOR REPORT ═══ -->
+    <div id="view-report" style="display:none;">
+      <!-- Filters bar -->
+      <div class="pbar" style="gap:12px;flex-wrap:wrap;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <label style="font-size:11px;font-weight:600;color:var(--tx2);">Period:</label>
+          <select id="rpt-period" class="inp" style="width:200px;" onchange="renderReport()"><option value="">— Select period —</option></select>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <label style="font-size:11px;font-weight:600;color:var(--tx2);">Advisor:</label>
+          <select id="rpt-advisor" class="inp" style="width:160px;" onchange="renderReport()"><option value="">— All Advisors —</option></select>
+        </div>
+        <button class="btn btn-p btn-sm" onclick="printReport('portrait')" style="margin-left:auto;">&#x1F5A8; Print Portrait</button>
+        <button class="btn btn-g btn-sm" onclick="printReport('landscape')">&#x1F5A8; Print Landscape</button>
+        <button class="btn btn-g btn-sm" onclick="exportReportExcel()">&#x1F4CA; Excel</button>
+      </div>
+      <div id="rpt-content"></div>
+    </div>
+
+    <!-- ═══ SETTINGS ═══ -->
+    <div id="view-settings" style="display:none;">
+      <div class="card">
+        <div class="card-hdr">
+          <div>
+            <div class="card-title">Advisor Settings</div>
+            <div class="hint" style="margin-top:3px;">LM commission = cap − rate. New cap 75%, others 70%. Blank rate = not applicable.</div>
+          </div>
+          <button class="btn btn-p btn-sm" onclick="addAdvisor()">+ Add Advisor</button>
+        </div>
+        <div id="adv-settings-wrap"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</div>
+<div class="toasts" id="toasts"></div>
+
+<script>
+// ── CONSTANTS ───────────────────────────────────────────────────────────────
+var PROVIDERS = ["Ardan", "IDAD", "Causeway", "Mariana", "GC Partners", "Invoice", "Morningstar", "Novia Global", "Utmost", "RL360"];
+var BIZ_TYPES = ["New", "AMC", "Trail", "Top Up", "Direct Fee", "Dealing"];
+var CURRENCIES = ["USD", "GBP", "EUR", "AED"];
+var LM_CAPS = {"New": 0.75, "AMC": 0.7, "Trail": 0.7, "Top Up": 0.7, "Direct Fee": 0.7, "Dealing": 0.7};
+var DEFAULT_ADVISORS = [{"name": "Alexander Hutton", "rates": {"New": 0.75, "AMC": 0.7, "Trail": 0.7, "Top Up": 0.7, "Direct Fee": 0.7, "Dealing": 0.75}, "lm": "\u2014", "retainer": "", "bdmCost": ""}, {"name": "Colin Lynam", "rates": {"New": 0.75, "AMC": 0.7, "Trail": 0.7, "Top Up": 0.7, "Direct Fee": 0.7, "Dealing": 0.7}, "lm": "\u2014", "retainer": "", "bdmCost": ""}, {"name": "Gareth Bowkett", "rates": {"New": 0.7, "AMC": 0.7, "Trail": 0.7, "Top Up": 0.7, "Direct Fee": 0.7, "Dealing": 0.7}, "lm": "Colin Lynam", "retainer": "", "bdmCost": ""}, {"name": "Neil Stewart", "rates": {"New": 0.75, "AMC": 0.7, "Trail": 0.7, "Top Up": 0.7, "Direct Fee": 0.7, "Dealing": 0.75}, "lm": "\u2014", "retainer": "", "bdmCost": ""}, {"name": "James Nicholas", "rates": {"New": 0.4, "AMC": 0.4, "Trail": 0.4, "Top Up": 0.4, "Direct Fee": 0.4, "Dealing": 0.4}, "lm": "\u2014", "retainer": "", "bdmCost": ""}, {"name": "Joe Woodhouse", "rates": {"New": 0.7, "AMC": 0.7, "Trail": 0.7, "Top Up": 0.7, "Direct Fee": 0.7, "Dealing": 0.7}, "lm": "Colin Lynam", "retainer": "", "bdmCost": ""}, {"name": "Chris Hawtin", "rates": {"New": 0.7, "AMC": 0.7, "Trail": 0.7, "Top Up": 0.7, "Direct Fee": 0.7, "Dealing": 0.7}, "lm": "\u2014", "retainer": "", "bdmCost": ""}, {"name": "Lewis Delaney", "rates": {"New": 0.8, "AMC": 0.7, "Trail": 0.7, "Top Up": 0.8, "Direct Fee": 0.7, "Dealing": 0.8}, "lm": "\u2014", "retainer": "", "bdmCost": ""}, {"name": "Paul McCullagh", "rates": {"New": 0.67, "AMC": 0.67, "Trail": 0.67, "Top Up": 0.67, "Direct Fee": 0.67, "Dealing": 0.67}, "lm": "Colin Lynam", "retainer": "", "bdmCost": ""}, {"name": "Louis Martirossian", "rates": {"New": 0.55, "AMC": 0.55, "Trail": 0.55, "Top Up": 0.55, "Direct Fee": 0.55, "Dealing": 0.55}, "lm": "\u2014", "retainer": "", "bdmCost": ""}, {"name": "Alex Martirossian", "rates": {"New": 0.1, "AMC": 0.1, "Trail": 0.1, "Top Up": 0.1, "Direct Fee": 0.1, "Dealing": 0.1}, "lm": "\u2014", "retainer": "", "bdmCost": ""}, {"name": "Ziyad", "rates": {"New": 0.1, "AMC": 0.1, "Trail": 0.1, "Top Up": 0.1, "Direct Fee": 0.1, "Dealing": 0.1}, "lm": "\u2014", "retainer": "", "bdmCost": ""}, {"name": "Anthony Eyley", "rates": {"New": 0.8, "AMC": 0.8, "Trail": 0.8, "Top Up": 0.8, "Direct Fee": 0.8, "Dealing": 0.8}, "lm": "\u2014", "retainer": "", "bdmCost": ""}, {"name": "Capital Associates", "rates": {"New": 0.7, "AMC": 0.7, "Trail": 0.7, "Top Up": 0.7, "Direct Fee": 0.7, "Dealing": 0.7}, "lm": "Colin Lynam", "retainer": "", "bdmCost": ""}];
+var BDM_LIST = ['—','Ziyad','Alex Martirossian','Other'];
+var LM_LIST = ['—','Colin Lynam','Alex Hutton','Mazhar','Other'];
+
+// ── STATE ───────────────────────────────────────────────────────────────────
+var advisors=[], rows=[], savedPeriods={}, periodHalf='1st', rowId=0, curView='entry';
+var _curSumPeriod=null, _sumDeds={};
+
+// ── UTILS ───────────────────────────────────────────────────────────────────
+function $(id){return document.getElementById(id);}
+function n(v){return parseFloat(v)||0;}
+function fmt(v){if(!v&&v!==0)return '—';return n(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function fmtN(v){if(!v)return '';return n(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function toast(msg,type){var c=$('toasts');var t=document.createElement('div');t.className='toast'+(type?' '+type:'');t.textContent=msg;c.appendChild(t);requestAnimationFrame(function(){requestAnimationFrame(function(){t.classList.add('show');});});setTimeout(function(){t.classList.remove('show');setTimeout(function(){t.remove();},300);},2800);}
+function getAdv(name){return advisors.find(function(a){return a.name===name;})||null;}
+function getRate(name,biz){var a=getAdv(name);if(!a)return 0.7;var r=a.rates||{};return r[biz]!==undefined&&r[biz]!==''?n(r[biz]):(r.default!==undefined?n(r.default):0.7);}
+function autoLM(advName,biz,rate){
+  var a=getAdv(advName);
+  if(!a)return{lm:'—',lmPct:0};
+  var lm=a.lm;
+  // Treat any empty/dash value as no LM
+  var noLM=!lm||lm===''||lm==='—'||lm==='\u2014'||lm.trim()===''||lm==='null'||lm==='undefined';
+  if(noLM)return{lm:'—',lmPct:0};
+  var cap=LM_CAPS[biz]||0.70;
+  var diff=Math.round((cap-rate)*10000)/10000;
+  if(diff<=0)return{lm:'—',lmPct:0};
+  return{lm:lm,lmPct:diff};
+}
+
+// ── ROW CALC ────────────────────────────────────────────────────────────────
+function calcRow(r){
+  var recv=n(r.received), rate=n(r.rate);
+  var gross=recv*rate;
+  var bdmPct=n(r.bdmPct);
+  // Always recalculate LM live from advisor settings — never trust stored lmPct
+  var lmResult=r.advisor?autoLM(r.advisor,r.bizType||'AMC',rate):{lm:'—',lmPct:0};
+  var lmPct=lmResult.lmPct;
+  // Also sync back onto the row so display is correct
+  r.lm=lmResult.lm;r.lmPct=lmPct;
+  var bdmAmt=(r.bdm&&r.bdm!=='—'&&r.bdm!=='\u2014'&&bdmPct>0)?gross*bdmPct:0;
+  // LM is CALCULATED but NEVER deducted from advisor net — it flows to Colin separately
+  var lmAmt=(lmResult.lm&&lmResult.lm!=='—'&&lmPct>0)?gross*lmPct:0;
+  return{gross:gross,bdmAmt:bdmAmt,lmAmt:lmAmt,net:gross-bdmAmt};
+}
+
+// ── ROW EVENTS ──────────────────────────────────────────────────────────────
+function onRC(id,field,val){
+  var r=rows.find(function(x){return x.id===id;});if(!r)return;
+  r[field]=val;
+  if(field==='advisor'||field==='bizType'){
+    r.rate=getRate(r.advisor,r.bizType);
+    var lm=autoLM(r.advisor,r.bizType,r.rate);r.lm=lm.lm;r.lmPct=lm.lmPct;
+    // Only update rate input and calc cells — do NOT call renderRows()
+    var tr=document.querySelector('#rows-body tr[data-id="'+id+'"]');
+    if(tr){
+      var rInp=tr.querySelector('input[data-f="rate"]');
+      if(rInp)rInp.value=r.rate!==undefined?Math.round(n(r.rate)*100):'';
+    }
+    updateRowCalc(r);renderTotals();
+  } else if(field==='rate'){
+    var lm2=autoLM(r.advisor,r.bizType,n(val));r.lm=lm2.lm;r.lmPct=lm2.lmPct;
+    updateRowCalc(r);renderTotals();
+  } else if(field==='received'||field==='bdmPct'||field==='bdm'||field==='currency'){
+    updateRowCalc(r);renderTotals();
+  }
+  // Text fields (client, provider, date) — just update state, no DOM changes
+}
+
+function updateRowCalc(r){
+  var c=calcRow(r);
+  var rowEl=document.querySelector('#rows-body tr[data-id="'+r.id+'"]');
+  if(!rowEl){renderRows();return;}
+  rowEl.querySelectorAll('[data-calc]').forEach(function(el){
+    var type=el.dataset.calc;
+    if(type==='gross'){el.textContent=c.gross?n2fmt(c.gross):'—';}
+    if(type==='bdmamt'){el.textContent=c.bdmAmt?n2fmt(c.bdmAmt):'—';}
+    if(type==='lmamt'){el.textContent=c.lmAmt?n2fmt(c.lmAmt):'—';}
+    if(type==='lmpct'){el.textContent=r.lmPct?Math.round(r.lmPct*1000)/10+'%':'—';}
+    if(type==='lm'){el.innerHTML=r.lm!=='—'?('<span style="font-size:10px;font-weight:600;color:var(--purptx);">'+r.lm+'</span><span class="lm-pill">auto</span>'):'<span style="color:var(--tx3);font-size:11px;">—</span>';}
+    if(type==='net'){el.textContent=c.gross?n2fmt(c.net):'—';el.className='mono '+(c.net<0?'neg':'pos')+' data-calc="net"';el.style.fontWeight='700';el.style.padding='4px 7px';}
+    if(type==='rateinp'){el.value=r.rate!==undefined?r.rate:'';}
+  });
+}
+
+function n2fmt(v){return n(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function addRow(){
+  var r={id:rowId++,date:'',client:'',advisor:'',provider:'',bizType:'AMC',currency:'USD',received:'',rate:'',bdm:'—',bdmPct:'',lm:'—',lmPct:0};
+  rows.push(r);
+  var tb=$('rows-body');
+  // Remove empty placeholder if present
+  if(tb.querySelector('td[colspan]'))tb.innerHTML='';
+  var tr=document.createElement('tr');
+  tr.dataset.id=r.id;
+  tr.innerHTML=buildRowHTML(r,rows.length);
+  tb.appendChild(tr);
+  restoreRowSelects(tr,r);
+  renderTotals();
+}
+function delRow(id){
+  rows=rows.filter(function(r){return r.id!==id;});
+  var tr=document.querySelector('#rows-body tr[data-id="'+id+'"]');
+  if(tr)tr.remove();
+  // Renumber
+  document.querySelectorAll('#rows-body tr').forEach(function(tr2,i){
+    var num=tr2.querySelector('.row-num');if(num)num.textContent=i+1;
+  });
+  if(!rows.length)$('rows-body').innerHTML='<tr><td colspan="18" style="text-align:center;padding:20px;color:var(--tx3);">No rows yet. Click + Add Row.</td></tr>';
+  renderTotals();
+}
+
+// ── PROVIDER COMBO ──────────────────────────────────────────────────────────
+function showProviderList(rowIdVal){
+  // Hide all others
+  document.querySelectorAll('.combo-list').forEach(function(el){el.classList.remove('show');});
+  var list=$('plist-'+rowIdVal);if(list)list.classList.add('show');
+}
+function filterProvider(rowIdVal){
+  var inp=$('pinp-'+rowIdVal);var list=$('plist-'+rowIdVal);if(!inp||!list)return;
+  var val=inp.value.toLowerCase();
+  list.classList.add('show');
+  list.querySelectorAll('.combo-item').forEach(function(el){
+    el.style.display=el.textContent.toLowerCase().includes(val)?'':'none';
+  });
+  onRC(rowIdVal,'provider',inp.value);
+}
+function selectProvider(rowIdVal,val){
+  var inp=$('pinp-'+rowIdVal);if(inp)inp.value=val;
+  var list=$('plist-'+rowIdVal);if(list)list.classList.remove('show');
+  onRC(rowIdVal,'provider',val);
+}
+function onProviderSel(id,val){
+  if(val==='__other__'){
+    // Switch to free-text mode
+    var r=rows.find(function(x){return x.id===id;});if(r)r.provider='';
+    renderRows();
+    // Focus the new text input
+    setTimeout(function(){
+      var tb=document.querySelector('#rows-body tr[data-id="'+id+'"] input[data-f="provider"]');
+      if(tb)tb.focus();
+    },50);
+  } else {
+    onRC(id,'provider',val);
+  }
+}
+
+// ── ROW HTML BUILDING ───────────────────────────────────────────────────────
+function buildRowHTML(r, rowNum){
+  var c=calcRow(r);
+  var netCls=c.net<0?'neg':'pos';
+  var lmShow=r.lm&&r.lm!=='—'
+    ?'<span style="font-size:10px;font-weight:600;color:var(--purptx);">'+r.lm+'</span><span class="lm-pill">auto</span>'
+    :'<span style="color:var(--tx3);font-size:11px;">—</span>';
+
+  var advOpts='<option value="">— Advisor —</option>'+advisors.map(function(a){
+    return'<option'+(a.name===r.advisor?' selected':'')+'>'+a.name+'</option>';
+  }).join('');
+  var btOpts=BIZ_TYPES.map(function(t){return'<option'+(t===r.bizType?' selected':'')+'>'+t+'</option>';}).join('');
+  var ccyOpts=CURRENCIES.map(function(cc){return'<option'+(cc===r.currency?' selected':'')+'>'+cc+'</option>';}).join('');
+  var bdmOpts=BDM_LIST.map(function(b){return'<option'+(b===r.bdm?' selected':'')+'>'+b+'</option>';}).join('');
+  var provInList=PROVIDERS.indexOf(r.provider||'')>=0;
+  var provCell=(!r.provider||provInList)
+    ?'<select class="ti" style="width:115px;" data-id="'+r.id+'" data-f="provider" onchange="onProviderSel(parseInt(this.dataset.id),this.value)"><option value="">— Provider —</option>'+PROVIDERS.map(function(p){return'<option'+(p===r.provider?' selected':'')+'>'+p+'</option>';}).join('')+'<option value="__other__">Other…</option></select>'
+    :'<input class="ti" style="width:105px;" placeholder="Type provider" value="'+(r.provider||'')+'" data-id="'+r.id+'" data-f="provider" oninput="onRC(parseInt(this.dataset.id),this.dataset.f,this.value)"><button class="ib" data-id="'+r.id+'" onclick="onRC(parseInt(this.dataset.id),\'provider\'\,\'\');renderRows();" style="font-size:10px;" title="Back to list">✕</button>';
+
+  return''
+    +'<td class="row-num" style="color:var(--tx3);font-size:10px;">'+(rowNum||'')+'</td>'
+    +'<td><input class="ti" type="date" style="width:118px;" value="'+(r.date||'')+'" data-id="'+r.id+'" data-f="date" onchange="onRC(parseInt(this.dataset.id),this.dataset.f,this.value)"></td>'
+    +'<td><input class="ti" style="width:130px;" placeholder="Client name" value="'+(r.client||'')+'" data-id="'+r.id+'" data-f="client" oninput="onRC(parseInt(this.dataset.id),this.dataset.f,this.value)"></td>'
+    +'<td><select class="ti" style="width:115px;" data-id="'+r.id+'" data-f="advisor" onchange="onRC(parseInt(this.dataset.id),this.dataset.f,this.value)">'+advOpts+'</select></td>'
+    +'<td>'+provCell+'</td>'
+    +'<td><select class="ti" style="width:80px;" data-id="'+r.id+'" data-f="bizType" onchange="onRC(parseInt(this.dataset.id),this.dataset.f,this.value)">'+btOpts+'</select></td>'
+    +'<td><select class="ti" style="width:60px;" data-id="'+r.id+'" data-f="currency" onchange="onRC(parseInt(this.dataset.id),this.dataset.f,this.value)">'+ccyOpts+'</select></td>'
+    +'<td><input class="ti ti-n" style="width:88px;" type="number" step="any" placeholder="0.00" value="'+(r.received!==undefined&&r.received!==''?r.received:'')+'" data-id="'+r.id+'" data-f="received" oninput="onRC(parseInt(this.dataset.id),this.dataset.f,this.value)"></td>'
+    +'<td style="white-space:nowrap;"><input class="ti ti-n" style="width:40px;" type="number" step="1" min="0" max="100" placeholder="70" value="'+(r.rate!==''&&r.rate!==undefined?Math.round(n(r.rate)*100):'')+'" data-id="'+r.id+'" data-f="rate" oninput="onRC(parseInt(this.dataset.id),this.dataset.f,parseFloat(this.value)/100||0)"><span style="font-size:10px;color:var(--tx3);">%</span></td>'
+    +'<td class="mono" data-calc="gross" style="color:var(--bluetx);padding:4px 7px;">'+(c.gross?n2fmt(c.gross):'—')+'</td>'
+    +'<td><select class="ti" style="width:80px;" data-id="'+r.id+'" data-f="bdm" onchange="onRC(parseInt(this.dataset.id),this.dataset.f,this.value)">'+bdmOpts+'</select></td>'
+    +'<td style="white-space:nowrap;"><input class="ti ti-n" style="width:40px;" type="number" step="1" min="0" max="100" placeholder="10" value="'+(r.bdmPct!==undefined&&r.bdmPct!==''?Math.round(n(r.bdmPct)*100):'')+'" data-id="'+r.id+'" data-f="bdmPct" oninput="onRC(parseInt(this.dataset.id),this.dataset.f,parseFloat(this.value)/100||0)"><span style="font-size:10px;color:var(--tx3);">%</span></td>'
+    +'<td class="mono" data-calc="bdmamt" style="color:var(--ambertx);padding:4px 7px;">'+(c.bdmAmt?n2fmt(c.bdmAmt):'—')+'</td>'
+    +'<td data-calc="lm">'+lmShow+'</td>'
+    +'<td class="mono" data-calc="lmpct" style="color:var(--purptx);font-size:10px;">'+(r.lmPct?Math.round(r.lmPct*1000)/10+'%':'—')+'</td>'
+    +'<td class="mono" data-calc="lmamt" style="color:var(--purptx);padding:4px 7px;">'+(c.lmAmt?n2fmt(c.lmAmt):'—')+'</td>'
+    +'<td class="mono '+netCls+'" data-calc="net" style="font-weight:700;padding:4px 7px;">'+(c.gross?n2fmt(c.net):'—')+'</td>'
+    +'<td><button class="ib" data-id="'+r.id+'" onclick="delRow(parseInt(this.dataset.id))"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg></button></td>';
+}
+
+function restoreRowSelects(tr,r){
+  // Values already embedded via selected attribute in buildRowHTML, but set again for safety
+  var sel;
+  sel=tr.querySelector('select[data-f="advisor"]');if(sel&&r.advisor)sel.value=r.advisor;
+  sel=tr.querySelector('select[data-f="provider"]');if(sel&&r.provider)sel.value=r.provider;
+  sel=tr.querySelector('select[data-f="bizType"]');if(sel&&r.bizType)sel.value=r.bizType;
+  sel=tr.querySelector('select[data-f="currency"]');if(sel&&r.currency)sel.value=r.currency;
+  sel=tr.querySelector('select[data-f="bdm"]');if(sel&&r.bdm)sel.value=r.bdm;
+}
+
+// ── RENDER ROWS (full rebuild — only on initial load) ────────────────────────
+function renderRows(){
+  var tb=$('rows-body');if(!tb)return;
+  if(!rows.length){
+    tb.innerHTML='<tr><td colspan="18" style="text-align:center;padding:20px;color:var(--tx3);">No rows yet. Click + Add Row.</td></tr>';
+    renderTotals();return;
+  }
+  tb.innerHTML='';
+  rows.forEach(function(r,idx){
+    var tr=document.createElement('tr');
+    tr.dataset.id=r.id;
+    tr.innerHTML=buildRowHTML(r,idx+1);
+    tb.appendChild(tr);
+  });
+  renderTotals();
+}
+
+
+// ── RENDER TOTALS ───────────────────────────────────────────────────────────
+function renderTotals(){
+  var tb=$('totals-body');if(!tb)return;
+  var byAdv={};
+  rows.forEach(function(r){
+    var a=r.advisor||'?';if(!a||a==='?')return;
+    if(!byAdv[a])byAdv[a]={gU:0,gG:0,gE:0,gA:0,bdmU:0,bdmG:0,lmU:0,lmG:0,nU:0,nG:0,nE:0,nA:0};
+    var c=calcRow(r);var cur=(r.currency||'USD')[0];
+    byAdv[a]['g'+cur]+=c.gross;byAdv[a]['n'+cur]+=c.net;
+    if(c.bdmAmt)byAdv[a]['bdm'+cur]+=c.bdmAmt;
+    if(c.lmAmt)byAdv[a]['lm'+cur]+=c.lmAmt;
+  });
+  var names=Object.keys(byAdv);
+  if(!names.length){tb.innerHTML='<tr><td colspan="13" style="text-align:center;padding:12px;color:var(--tx3);">Add rows to see totals.</td></tr>';return;}
+  function mc(v,cls){return v?'<span class="mono '+(cls||'')+'">'+fmt(v)+'</span>':'<span style="color:var(--tx3);">—</span>';}
+  tb.innerHTML=names.map(function(name){
+    var d=byAdv[name];
+    return'<tr>'
+      +'<td style="font-weight:600;">'+name+'</td>'
+      +'<td>'+mc(d.gU,'pos')+'</td><td>'+mc(d.gG,'pos')+'</td><td>'+mc(d.gE,'pos')+'</td><td>'+mc(d.gA,'pos')+'</td>'
+      +'<td>'+mc(d.bdmU,'')+'</td><td>'+mc(d.bdmG,'')+'</td>'
+      +'<td>'+mc(d.lmU,'')+'</td><td>'+mc(d.lmG,'')+'</td>'
+      +'<td>'+mc(d.nU,'pos')+'</td><td>'+mc(d.nG,'pos')+'</td><td>'+mc(d.nE,'pos')+'</td><td>'+mc(d.nA,'pos')+'</td>'
+      +'</tr>';
+  }).join('');
+}
+
+// ── NAVIGATION ──────────────────────────────────────────────────────────────
+function V(v){
+  curView=v;
+  ['entry','summary','history','settings','report'].forEach(function(x){
+    var el=$('view-'+x);if(el)el.style.display=x===v?'':'none';
+    var ni=$('nv-'+x);if(ni)ni.classList.toggle('active',x===v);
+  });
+  var titles={entry:'New Period',summary:'Summary',history:'History',settings:'Advisor Settings',report:'Advisor Report'};
+  $('ttitle').textContent=titles[v]||v;
+  if(v==='history')renderHistory();
+  if(v==='summary'){populateSumSel();$('fx-box').style.display='';}
+  if(v==='settings')renderSettings();
+  if(v==='report')initReport();
+}
+
+function initReport(){
+  // Populate period selector
+  var sel=$('rpt-period');
+  var ps=Object.values(savedPeriods).sort(function(a,b){return new Date(b.savedAt)-new Date(a.savedAt);});
+  sel.innerHTML='<option value="">— Select period —</option>'+ps.map(function(p){return'<option value="'+p.key+'">'+p.label+'</option>';}).join('');
+  // Populate advisor selector
+  var asel=$('rpt-advisor');
+  asel.innerHTML='<option value="">— All Advisors —</option>'+advisors.map(function(a){return'<option>'+a.name+'</option>';}).join('');
+}
+
+function renderReport(){
+  var pKey=$('rpt-period').value;
+  var advFilter=$('rpt-advisor').value;
+  var el=$('rpt-content');
+  if(!pKey){el.innerHTML='<div style="color:var(--tx3);font-size:13px;padding:20px 0;">Select a period to view the report.</div>';return;}
+  var p=savedPeriods[pKey];if(!p){return;}
+  var is1st=p.half==='1st';
+  var pRows=p.rows||[];
+  var deds=p.deds||{};
+
+  // Build BDM & LM totals
+  var bdmTotR={};var lmTotR={};
+  pRows.forEach(function(r){
+    var c=calcRow(r);var cur=(r.currency||'USD')[0];
+    if(r.bdm&&r.bdm!=='—'&&c.bdmAmt){if(!bdmTotR[r.bdm])bdmTotR[r.bdm]={U:0,G:0,E:0,A:0};bdmTotR[r.bdm][cur]+=c.bdmAmt;}
+    if(r.lm&&r.lm!=='—'&&c.lmAmt){if(!lmTotR[r.lm])lmTotR[r.lm]={U:0,G:0,E:0,A:0};lmTotR[r.lm][cur]+=c.lmAmt;}
+  });
+  var byAdvR=getSumByAdv(pRows);
+  Object.keys(bdmTotR).forEach(function(b){
+    if(!byAdvR[b])byAdvR[b]={gU:0,gG:0,gE:0,gA:0,nU:0,nG:0,nE:0,nA:0};
+    var t=bdmTotR[b];
+    byAdvR[b].gU+=t.U;byAdvR[b].gG+=t.G;byAdvR[b].gE+=t.E;byAdvR[b].gA+=t.A;
+    byAdvR[b].nU+=t.U;byAdvR[b].nG+=t.G;byAdvR[b].nE+=t.E;byAdvR[b].nA+=t.A;
+  });
+
+  // Which advisors to show
+  var showAdvs=advFilter?[advFilter]:advisors.map(function(a){return a.name;});
+
+  var html='';
+  showAdvs.forEach(function(advName){
+    var safe=advName.replace(/[^a-zA-Z0-9]/g,'_');
+    var advDeds=deds[safe]||{};
+    var d=byAdvR[advName]||{gU:0,gG:0,gE:0,gA:0,nU:0,nG:0,nE:0,nA:0};
+    var lmE=lmTotR[advName]||{U:0,G:0,E:0,A:0};
+    var advRows=pRows.filter(function(r){return r.advisor===advName;});
+
+    // Always read from saved period deds (p.deds) as source of truth for reports
+    // Fall back to _sumDeds only if it has values (summary was open)
+    var liveDeds=_sumDeds[safe]||{};
+    var curDeds={
+      wps: liveDeds.wps!==undefined&&liveDeds.wps!==''?liveDeds.wps:(advDeds.wps||''),
+      bdc: liveDeds.bdc!==undefined&&liveDeds.bdc!==''?liveDeds.bdc:(advDeds.bdc||''),
+      ins: liveDeds.ins!==undefined&&liveDeds.ins!==''?liveDeds.ins:(advDeds.ins||''),
+      golf:liveDeds.golf!==undefined&&liveDeds.golf!==''?liveDeds.golf:(advDeds.golf||''),
+      oth: liveDeds.oth!==undefined&&liveDeds.oth!==''?liveDeds.oth:(advDeds.oth||''),
+      bf_U:liveDeds.bf_U||advDeds.bf_U||'',
+      bf_G:liveDeds.bf_G||advDeds.bf_G||'',
+      bf_E:liveDeds.bf_E||advDeds.bf_E||'',
+      bf_A:liveDeds.bf_A||advDeds.bf_A||''
+    };
+    var wpsVal=n(curDeds.wps||0);var bdcVal=n(curDeds.bdc||0);
+    var insVal=n(curDeds.ins||0);var golfVal=n(curDeds.golf||0);var othVal=n(curDeds.oth||0);
+    var retainer=is1st?wpsVal:0;var bdmCost=bdcVal;
+    var netU=d.nU+lmE.U+n(curDeds.bf_U)-retainer-bdmCost-insVal-golfVal-othVal;
+    var netG=d.nG+lmE.G+n(curDeds.bf_G);
+    var netE=d.nE+lmE.E+n(curDeds.bf_E);
+    var netA=d.nA+lmE.A+n(curDeds.bf_A);
+    var hasAny=d.gU||d.gG||d.gE||d.gA||n(curDeds.bf_U)||n(curDeds.bf_G)||advRows.length;
+    if(!hasAny&&!advFilter)return; // skip empty advisors when showing all
+
+    function mf(v){if(!v||v==0)return'-';return parseFloat(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
+    function mfn(v){return parseFloat(v||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
+
+    // Totals across all rows for this advisor
+    var totalGrossU=0,totalGrossG=0,totalGrossE=0,totalGrossA=0;
+    var totalDedU=retainer+bdmCost+insVal+golfVal+othVal;
+    // Only show LM earned on the report if THIS advisor IS a line manager for others
+    var isLM=advisors.some(function(a){return a.lm===advName;});
+    var showLM=isLM&&(lmE.U>0||lmE.G>0||lmE.E>0||lmE.A>0);
+    advRows.forEach(function(r){
+      var c=calcRow(r);var cur=(r.currency||'USD')[0];
+      if(cur==='U')totalGrossU+=c.gross;
+      if(cur==='G')totalGrossG+=c.gross;
+      if(cur==='E')totalGrossE+=c.gross;
+      if(cur==='A')totalGrossA+=c.gross;
+    });
+
+    html+='<div class="card rpt-advisor-block" style="margin-bottom:20px;" data-adv="'+advName+'">'
+
+    // Header
+    +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;padding-bottom:12px;border-bottom:2px solid #1A2B45;">'
+    +'<div><div style="font-size:16px;font-weight:700;color:#1A2B45;">'+advName+'</div>'
+    +'<div style="font-size:11px;color:var(--tx3);margin-top:2px;">Commission Statement &nbsp;·&nbsp; '+p.label+'</div></div>'
+    +'<div style="font-size:11px;color:var(--tx3);">'+advRows.length+' transaction'+(advRows.length!==1?'s':'')+'</div>'
+    +'</div>'
+
+    // Commission rows table
+    +(advRows.length?
+      '<div style="font-size:10px;font-weight:700;color:#1A2B45;text-transform:uppercase;letter-spacing:.07em;margin-bottom:7px;">Transactions</div>'
+      +'<div class="tbl-wrap" style="margin-bottom:16px;"><table style="width:100%;">'
+      +'<thead><tr>'
+      +'<th>Date</th><th>Client</th><th>Provider</th><th>Type</th><th>Ccy</th>'
+      +'<th style="text-align:right;">Received</th><th style="text-align:right;">Rate%</th>'
+      +'<th style="text-align:right;">Gross</th>'
+      +'<th style="text-align:right;">BDM Out</th>'
+      +'<th style="text-align:right;">LM Out</th>'
+      +'<th style="text-align:right;">Net Commission</th>'
+      +'</tr></thead><tbody>'
+      +advRows.map(function(r,i){
+        var c=calcRow(r);
+        return'<tr style="background:'+(i%2===0?'#fff':'#f7f9fc')+'">'
+          +'<td style="font-size:11px;">'+( r.date||'')+'</td>'
+          +'<td style="font-size:11px;font-weight:500;">'+( r.client||'')+'</td>'
+          +'<td style="font-size:11px;">'+( r.provider||'')+'</td>'
+          +'<td style="font-size:11px;">'+( r.bizType||'')+'</td>'
+          +'<td style="font-size:11px;font-weight:600;">'+( r.currency||'USD')+'</td>'
+          +'<td class="mono" style="text-align:right;font-size:11px;">'+mf(r.received)+'</td>'
+          +'<td class="mono" style="text-align:right;font-size:11px;">'+(n(r.rate)*100).toFixed(0)+'%</td>'
+          +'<td class="mono" style="text-align:right;font-size:11px;font-weight:600;">'+mf(c.gross)+'</td>'
+          +'<td class="mono" style="text-align:right;font-size:11px;">'+( c.bdmAmt?'('+mf(c.bdmAmt)+')':'-')+'</td>'
+          +'<td class="mono" style="text-align:right;font-size:11px;">'+( c.lmAmt?'('+mf(c.lmAmt)+')':'-')+'</td>'
+          +'<td class="mono" style="text-align:right;font-size:11px;font-weight:700;'+(c.net<0?'color:var(--red)':'')+';">'+(c.net<0?'('+mf(Math.abs(c.net))+')':mf(c.net))+'</td>'
+          +'</tr>';
+      }).join('')
+      // Totals row
+      +'<tr style="background:#EBF0F8;border-top:2px solid #1A2B45;">'
+      +'<td colspan="7" style="padding:7px 10px;font-size:11px;font-weight:700;color:#1A2B45;">TOTAL GROSS</td>'
+      +'<td class="mono" style="text-align:right;font-size:12px;font-weight:700;color:#1A2B45;padding:7px 10px;">'
+      +(totalGrossU?mfn(totalGrossU)+' USD':'')+(totalGrossG?' / '+mfn(totalGrossG)+' GBP':'')+(totalGrossE?' / '+mfn(totalGrossE)+' EUR':'')+(totalGrossA?' / '+mfn(totalGrossA)+' AED':'')
+      +'</td><td colspan="3"></td></tr>'
+      +'</tbody></table></div>'
+    :'<div style="color:var(--tx3);font-size:12px;margin-bottom:12px;">No transactions this period.</div>')
+
+    // Deductions + Net — clean vertical flow
+    +'<div style="max-width:480px;margin-left:auto;">'
+    +'<table style="width:100%;border-collapse:collapse;border:1px solid #D8DEE9;border-radius:8px;overflow:hidden;">'
+
+    // B/F
+    +(n(curDeds.bf_U)||n(curDeds.bf_G)||n(curDeds.bf_E)||n(curDeds.bf_A)?
+      '<tr><td style="padding:8px 14px;font-size:12px;color:#4A5E78;background:#fff;">B/F from Previous Period</td>'
+      +'<td style="padding:8px 14px;font-family:monospace;font-size:12px;text-align:right;background:#fff;color:#1a5faf;">'
+      +(n(curDeds.bf_U)?mfn(n(curDeds.bf_U))+' USD ':'' )+(n(curDeds.bf_G)?mfn(n(curDeds.bf_G))+' GBP ':'' )+(n(curDeds.bf_E)?mfn(n(curDeds.bf_E))+' EUR ':'' )+(n(curDeds.bf_A)?mfn(n(curDeds.bf_A))+' AED':'' )+'</td></tr>':'')
+
+    // Gross commission
+    +'<tr style="background:#f0f4f8;"><td style="padding:8px 14px;font-size:12px;font-weight:600;color:#1A2B45;">Total Gross Commission</td>'
+    +'<td style="padding:8px 14px;font-family:monospace;font-size:12px;font-weight:600;text-align:right;color:#0f8a5f;">'
+    +(totalGrossU?mfn(totalGrossU)+' USD ':'' )+(totalGrossG?mfn(totalGrossG)+' GBP ':'' )+(totalGrossE?mfn(totalGrossE)+' EUR ':'' )+(totalGrossA?mfn(totalGrossA)+' AED':'' )+'</td></tr>'
+
+    // LM earned
+    +(showLM?
+      '<tr><td style="padding:8px 14px;font-size:12px;color:#4A5E78;background:#fff;">Line Manager Commission</td>'
+      +'<td style="padding:8px 14px;font-family:monospace;font-size:12px;text-align:right;background:#fff;color:#0f8a5f;">'
+      +(lmE.U?mfn(lmE.U)+' USD ':'' )+(lmE.G?mfn(lmE.G)+' GBP':'' )+'</td></tr>':'')
+
+    // Deductions header
+    +((retainer||bdmCost||insVal||golfVal||othVal)?
+      '<tr style="background:#fff3f3;"><td style="padding:5px 14px;font-size:10px;font-weight:700;color:#C0392B;text-transform:uppercase;letter-spacing:.07em;" colspan="2">Deductions</td></tr>':'')
+    +(retainer?'<tr><td style="padding:7px 14px;font-size:12px;color:#4A5E78;background:#fff;padding-left:22px;">WPS / Retainer</td><td style="padding:7px 14px;font-family:monospace;font-size:12px;text-align:right;color:#C0392B;background:#fff;">('+mfn(retainer)+') USD</td></tr>':'')
+    +(bdmCost?'<tr style="background:#fafafa;"><td style="padding:7px 14px;font-size:12px;color:#4A5E78;padding-left:22px;">BDM Cost</td><td style="padding:7px 14px;font-family:monospace;font-size:12px;text-align:right;color:#C0392B;">('+mfn(bdmCost)+') USD</td></tr>':'')
+    +(insVal?'<tr><td style="padding:7px 14px;font-size:12px;color:#4A5E78;background:#fff;padding-left:22px;">Insurance</td><td style="padding:7px 14px;font-family:monospace;font-size:12px;text-align:right;color:#C0392B;background:#fff;">('+mfn(insVal)+') USD</td></tr>':'')
+    +(golfVal?'<tr style="background:#fafafa;"><td style="padding:7px 14px;font-size:12px;color:#4A5E78;padding-left:22px;">Golf</td><td style="padding:7px 14px;font-family:monospace;font-size:12px;text-align:right;color:#C0392B;">('+mfn(golfVal)+') USD</td></tr>':'')
+    +(othVal?'<tr><td style="padding:7px 14px;font-size:12px;color:#4A5E78;background:#fff;padding-left:22px;">Others</td><td style="padding:7px 14px;font-family:monospace;font-size:12px;text-align:right;color:#C0392B;background:#fff;">('+mfn(othVal)+') USD</td></tr>':'')
+
+    // Total deductions
+    +((retainer||bdmCost||insVal||golfVal||othVal)?
+      '<tr style="background:#ffe8e8;"><td style="padding:8px 14px;font-size:12px;font-weight:600;color:#C0392B;">Total Deductions</td>'
+      +'<td style="padding:8px 14px;font-family:monospace;font-size:12px;font-weight:600;text-align:right;color:#C0392B;">('+mfn(totalDedU)+') USD</td></tr>':'')
+
+    // NET PAYABLE
+    +'<tr style="background:#1A2B45;">'
+    +'<td style="padding:11px 14px;font-size:13px;font-weight:700;color:#fff;">NET PAYABLE</td>'
+    +'<td style="padding:11px 14px;font-family:monospace;font-size:14px;font-weight:700;text-align:right;color:'+(netU<0?'#F08080':'#5DEBB0')+' ;">'
+    +(netU||netU===0?mfn(netU)+' USD':'' )+(netG&&netG!==0?' &nbsp; '+mfn(netG)+' GBP':'' )+(netE&&netE!==0?' &nbsp; '+mfn(netE)+' EUR':'' )+(netA&&netA!==0?' &nbsp; '+mfn(netA)+' AED':'' )
+    +'</td></tr>'
+    +'</table></div>'
+    +'</div>';
+  });
+
+  el.innerHTML=html||'<div style="color:var(--tx3);padding:20px 0;">No data for this selection.</div>';
+}
+
+function printReport(orientation){
+  orientation=orientation||'portrait';
+  var content=$('rpt-content');
+  if(!content||!content.innerHTML.trim()){toast('Nothing to print','err');return;}
+  var pKey=$('rpt-period').value;
+  var p=pKey?savedPeriods[pKey]:{};
+  var docHtml='<!DOCTYPE html><html><head><meta charset="UTF-8"><title> </title>'
+    +'<style>'
+    +':root{--tx3:#888;--tx2:#555;--surf2:#f5f5f5;--red:#C0392B;--green:#0f8a5f;--purptx:#4a5fa8;--brd:#ddd;}'
+    +'*{box-sizing:border-box;margin:0;padding:0;}'
+    +'@page{margin:0;size:A4 '+orientation+';}'
+    +'html{-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+    +'body{font-family:Arial,sans-serif;color:#222;padding:12mm 14mm;}'
+    +'table{width:100%;border-collapse:collapse;margin-bottom:12px;}'
+    +'th{background:#1A2B45;color:#fff;padding:7px 10px;font-size:10px;text-align:left;}'
+    +'td{padding:6px 10px;font-size:11px;border-bottom:1px solid #eee;}'
+    +'.mono{font-family:monospace;}'
+    +'.card{background:#fff;border:1px solid #ddd;border-radius:6px;padding:14px;margin-bottom:20px;page-break-inside:avoid;}'
+    +'.tbl-wrap{overflow:hidden;}'
+    +'.badge{display:inline-block;padding:2px 6px;border-radius:10px;background:#EBF0F8;color:#1A5FAF;font-size:9px;font-weight:600;}'
+    +'.lm-pill{display:none;}'
+    +'</style></head><body>'
+    +'<div style="text-align:center;margin-bottom:14px;padding-bottom:10px;border-bottom:3px solid #1A2B45;">'
+    +'<div style="font-size:17px;font-weight:700;color:#1A2B45;">Commission Statement</div>'
+    +(p&&p.label?'<div style="font-size:12px;color:#666;margin-top:3px;">'+p.label+'</div>':'')
+    +'</div>'
+    +content.innerHTML
+    +'</body></html>';
+  var w=window.open('','_blank');
+  w.document.open();
+  w.document.write(docHtml);
+  w.document.close();
+  w.onload=function(){w.focus();w.print();};
+  setTimeout(function(){if(w&&!w.closed){w.focus();w.print();}},800);
+}
+function setHalf(h){
+  if(h===periodHalf)return;
+  periodHalf=h;
+  $('pt-1').classList.toggle('on',h==='1st');
+  $('pt-2').classList.toggle('on',h==='2nd');
+  // 2nd half always starts blank; 1st half keeps whatever is there
+  if(h==='2nd'){rows=[];rowId=0;renderRows();}
+}
+
+// ── SAVE / LOAD ──────────────────────────────────────────────────────────────
+function getPKey(){return periodHalf+'-'+$('p-month').value+'-'+$('p-year').value;}
+function getPLabel(){
+  var months=['January','February','March','April','May','June','July','August','September','October','November','December'];
+  var m=$('p-month').value;var y=$('p-year').value;
+  if(periodHalf==='1st'){
+    // 1st half: 26 PrevMonth to 10 CurrentMonth
+    var mIdx=months.indexOf(m);
+    var prevM=mIdx>0?months[mIdx-1]:'December';
+    var prevY=mIdx>0?y:(parseInt(y)-1).toString();
+    return'26 '+prevM+' '+prevY+' – 10 '+m+' '+y;
+  } else {
+    return'11 – 25 '+m+' '+y;
+  }
+}
+// savePeriod defined below
+function loadPeriod(key){
+  var p=savedPeriods[key];if(!p)return;
+  rows=(p.rows||[]).map(function(r,i){
+    // Ensure numeric fields are numbers not strings
+    return Object.assign({},r,{
+      id:i,
+      rate:r.rate!==undefined?parseFloat(r.rate)||'':'',
+      bdmPct:r.bdmPct!==undefined?parseFloat(r.bdmPct)||'':'',
+      lmPct:r.lmPct!==undefined?parseFloat(r.lmPct)||0:0,
+      received:r.received!==undefined?r.received:''
+    });
+  });
+  rowId=rows.length;periodHalf=p.half||'1st';
+  $('p-month').value=p.month;$('p-year').value=p.year;
+  setHalf(periodHalf);V('entry');renderRows();toast('Loaded','ok');
+}
+// deletePeriod defined below
+function renderHistory(){
+  var el=$('hist-list');if(!el)return;
+  var ps=Object.values(savedPeriods).sort(function(a,b){return new Date(b.savedAt)-new Date(a.savedAt);});
+  if(!ps.length){el.innerHTML='<span class="hint">No saved periods yet.</span>';return;}
+  el.innerHTML=ps.map(function(p){
+    return'<div class="hist-item" data-key="'+p.key+'" onclick="loadPeriod(this.dataset.key)">'
+      +'<div><div style="font-size:13px;font-weight:600;">'+p.label+'</div>'
+      +'<div class="hint" style="margin-top:2px;">'+(p.rows||[]).length+' rows &middot; '+new Date(p.savedAt).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'</div></div>'
+      +'<div style="display:flex;gap:7px;align-items:center;">'
+      +'<span class="badge '+(p.half==='1st'?'b-blue':'b-purp')+'">'+p.half+' half</span>'
+      +'<button class="btn btn-red btn-xs" data-key="'+p.key+'" onclick="event.stopPropagation();deletePeriod(this.dataset.key)">Delete</button>'
+      +'</div></div>';
+  }).join('');
+}
+
+// ── SUMMARY ──────────────────────────────────────────────────────────────────
+function populateSumSel(){
+  var sel=$('sum-sel');if(!sel)return;
+  var ps=Object.values(savedPeriods).sort(function(a,b){return new Date(b.savedAt)-new Date(a.savedAt);});
+  sel.innerHTML='<option value="">— Select saved period —</option>'+ps.map(function(p){return'<option value="'+p.key+'">'+p.label+'</option>';}).join('');
+}
+function loadSummary(){
+  var key=$('sum-sel').value;if(!key){$('sum-content').innerHTML='<span class="hint">Select a period.</span>';return;}
+  var p=savedPeriods[key];if(!p)return;
+  _curSumPeriod=p;
+  // Always start fresh — WPS/BDC/ins/golf/oth blank each period, user fills them in
+  // Only preserve paid status from saved deds
+  _sumDeds={};
+  if(p.deds){
+    Object.keys(p.deds).forEach(function(safe){
+      _sumDeds[safe]={
+        bf_U:'',bf_G:'',bf_E:'',bf_A:'',
+        wps:'',bdc:'',ins:'',golf:'',oth:'',status:'',
+        paidU:!!(p.deds[safe].paidU),
+        paidG:!!(p.deds[safe].paidG),
+        paidE:!!(p.deds[safe].paidE),
+        paidA:!!(p.deds[safe].paidA)
+      };
+    });
+  }
+  // Auto-populate B/F from previous period's unpaid balances
+  autoBF(p);
+  renderSummary(p);
+}
+
+function autoBF(p){
+  // Always recalculate B/F from previous period's unpaid amounts
+  console.log('[autoBF] current period:', p.key, 'half:', p.half);
+
+  // Find the immediately preceding period by month/half, not savedAt
+  var monthOrder=['January','February','March','April','May','June','July','August','September','October','November','December'];
+  function periodScore(pd){
+    var m=monthOrder.indexOf(pd.month||'');
+    var y=parseInt(pd.year)||2026;
+    var h=pd.half==='1st'?0:1;
+    return y*24+m*2+h;
+  }
+  var curScore=periodScore(p);
+  var allPeriods=Object.values(savedPeriods).filter(function(x){return x.key!==p.key;});
+  // Find period with highest score that is less than current
+  var prev=null;var prevScore=-1;
+  allPeriods.forEach(function(x){
+    var s=periodScore(x);
+    console.log('[autoBF] checking period:', x.key, 'score:', s, 'curScore:', curScore);
+    if(s<curScore&&s>prevScore){prevScore=s;prev=x;}
+  });
+  console.log('[autoBF] previous period found:', prev?prev.key:'NONE');
+  if(!prev)return;
+
+  // For each advisor, if previous period had unpaid currency, carry it forward as B/F
+  var prevRows=prev.rows||[];
+  var prevByAdv=getSumByAdv(prevRows);
+  var prevIs1st=prev.half==='1st';
+
+  // Include ALL advisors from previous period, not just those in current period
+  Object.keys(prevByAdv).forEach(function(advName){
+    var safe=advName.replace(/[^a-zA-Z0-9]/g,'_');
+    var prevDeds=(prev.deds&&prev.deds[safe])||{};
+    var prevD=prevByAdv[advName];
+    var prevAv=getAdv(advName)||{};
+    var prevLmTot={};
+    prevRows.forEach(function(r){
+      var c=calcRow(r);var cur=(r.currency||'USD')[0];
+      if(r.lm&&r.lm!=='—'&&c.lmAmt){if(!prevLmTot[r.lm])prevLmTot[r.lm]={U:0,G:0,E:0,A:0};prevLmTot[r.lm][cur]+=c.lmAmt;}
+    });
+    var prevLmEarned=prevLmTot[advName]||{U:0,G:0,E:0,A:0};
+    var prevWps=prevIs1st?n(prevDeds.wps!==undefined?prevDeds.wps:prevAv.retainer):0;
+    var prevBdc=!prevIs1st?n(prevDeds.bdc!==undefined?prevDeds.bdc:prevAv.bdmCost):0;
+    var prevNetU=prevD.nU+prevLmEarned.U+n(prevDeds.bf_U)-prevWps-prevBdc-n(prevDeds.ins)-n(prevDeds.golf)-n(prevDeds.oth);
+    var prevNetG=prevD.nG+prevLmEarned.G+n(prevDeds.bf_G);
+    var prevNetE=prevD.nE+prevLmEarned.E+n(prevDeds.bf_E);
+    var prevNetA=prevD.nA+prevLmEarned.A+n(prevDeds.bf_A);
+
+    if(!_sumDeds[safe])_sumDeds[safe]={bf_U:'',bf_G:'',bf_E:'',bf_A:'',ins:'',golf:'',oth:'',status:'',paidU:false,paidG:false,paidE:false,paidA:false};
+    // Always overwrite B/F from previous period's unpaid net
+    // (B/F is never manually entered - it always derives from previous period)
+    _sumDeds[safe].bf_U=(!prevDeds.paidU&&prevNetU)?prevNetU.toFixed(2):'';
+    _sumDeds[safe].bf_G=(!prevDeds.paidG&&prevNetG)?prevNetG.toFixed(2):'';
+    _sumDeds[safe].bf_E=(!prevDeds.paidE&&prevNetE)?prevNetE.toFixed(2):'';
+    _sumDeds[safe].bf_A=(!prevDeds.paidA&&prevNetA)?prevNetA.toFixed(2):'';
+  });
+}
+
+function getSumByAdv(pRows){
+  var byAdv={};
+  pRows.forEach(function(r){
+    var a=r.advisor||'Unknown';
+    if(!byAdv[a])byAdv[a]={gU:0,gG:0,gE:0,gA:0,nU:0,nG:0,nE:0,nA:0,bdmU:0,bdmG:0,bdmE:0,lmU:0,lmG:0,lmE:0};
+    var c=calcRow(r);var cur=(r.currency||'USD')[0];
+    byAdv[a]['g'+cur]+=c.gross;byAdv[a]['n'+cur]+=c.net;
+    if(c.bdmAmt)byAdv[a]['bdm'+cur]+=c.bdmAmt;
+    if(c.lmAmt)byAdv[a]['lm'+cur]+=c.lmAmt;
+  });
+  return byAdv;
+}
+
+function renderSummary(p){
+  var pRows=p.rows||[];var is1st=p.half==='1st';
+  var byAdv=getSumByAdv(pRows);
+  // Always show ALL advisors from settings — zero if no activity
+  var advNames=advisors.map(function(a){return a.name;}).sort();
+  advNames.forEach(function(a){
+    if(!byAdv[a])byAdv[a]={gU:0,gG:0,gE:0,gA:0,nU:0,nG:0,nE:0,nA:0,bdmU:0,bdmG:0,bdmE:0,lmU:0,lmG:0,lmE:0};
+  });
+
+  // BDM & LM totals
+  var bdmTot={};var lmTot={};
+  pRows.forEach(function(r){
+    var c=calcRow(r);var cur=(r.currency||'USD')[0];
+    if(r.bdm&&r.bdm!=='—'&&c.bdmAmt){if(!bdmTot[r.bdm])bdmTot[r.bdm]={U:0,G:0,E:0,A:0};bdmTot[r.bdm][cur]+=c.bdmAmt;}
+    if(r.lm&&r.lm!=='—'&&c.lmAmt){if(!lmTot[r.lm])lmTot[r.lm]={U:0,G:0,E:0,A:0};lmTot[r.lm][cur]+=c.lmAmt;}
+  });
+  // Add BDM earnings into each BDM's byAdv entry so they appear in main summary
+  Object.keys(bdmTot).forEach(function(bdmName){
+    if(!byAdv[bdmName])byAdv[bdmName]={gU:0,gG:0,gE:0,gA:0,nU:0,nG:0,nE:0,nA:0,bdmU:0,bdmG:0,bdmE:0,lmU:0,lmG:0,lmE:0};
+    var t=bdmTot[bdmName];
+    // BDM gross = their BDM commission earned
+    byAdv[bdmName].gU+=t.U;byAdv[bdmName].gG+=t.G;byAdv[bdmName].gE+=t.E;byAdv[bdmName].gA+=t.A;
+    byAdv[bdmName].nU+=t.U;byAdv[bdmName].nG+=t.G;byAdv[bdmName].nE+=t.E;byAdv[bdmName].nA+=t.A;
+  });
+
+  var html='<div style="font-size:12px;color:var(--tx2);margin-bottom:10px;">Period: <strong style="color:var(--tx);">'+p.label+'</strong> &middot; '+pRows.length+' rows</div>';
+
+  // ── MAIN SUMMARY TABLE ──
+  html+='<div class="tbl-wrap"><table class="sum-tbl"><thead>'
+    +'<tr>'
+    +'<th class="left" rowspan="2" style="min-width:24px;">#</th>'
+    +'<th class="left" rowspan="2" style="min-width:130px;">Advisor</th>'
+    +'<th colspan="4" style="background:rgba(108,142,255,.1);">B/F from Previous</th>'
+    +'<th colspan="4" style="background:rgba(52,211,153,.08);">Gross Commission</th>'
+    +'<th rowspan="2">WPS</th>'
+    +'<th rowspan="2">BDM Cost</th>'
+    +'<th rowspan="2">Insurance</th>'
+    +'<th rowspan="2">Golf</th>'
+    +'<th rowspan="2">Others</th>'
+    +'<th colspan="4" style="background:rgba(168,85,247,.1);">Net Payable</th>'
+    +'<th rowspan="2">Paid Status</th>'+'<th rowspan="2">Report</th>'
+    +'</tr>'
+    +'<tr>'
+    +'<th style="background:rgba(108,142,255,.06);">USD</th><th style="background:rgba(108,142,255,.06);">GBP</th><th style="background:rgba(108,142,255,.06);">EUR</th><th style="background:rgba(108,142,255,.06);">AED</th>'
+    +'<th style="background:rgba(52,211,153,.05);">USD</th><th style="background:rgba(52,211,153,.05);">GBP</th><th style="background:rgba(52,211,153,.05);">EUR</th><th style="background:rgba(52,211,153,.05);">AED</th>'
+    +'<th style="background:rgba(168,85,247,.06);">USD</th><th style="background:rgba(168,85,247,.06);">GBP</th><th style="background:rgba(168,85,247,.06);">EUR</th><th style="background:rgba(168,85,247,.06);">AED</th>'
+    +'</tr></thead><tbody>';
+
+  advNames.forEach(function(advName,idx){
+    var d=byAdv[advName];var av=getAdv(advName)||{};
+    var safe=advName.replace(/[^a-zA-Z0-9]/g,'_');
+    if(!_sumDeds[safe])_sumDeds[safe]={bf_U:'',bf_G:'',bf_E:'',bf_A:'',wps:'',bdc:'',ins:'',golf:'',oth:'',status:'',paidU:false,paidG:false,paidE:false,paidA:false};
+    var deds=_sumDeds[safe];
+    // WPS/BDC always come from the input boxes — blank by default, user fills each period
+    // WPS: 1st half only | BDM Cost: both halves
+    var retainer=is1st?n(deds.wps):0;
+    var bdmCost=n(deds.bdc);
+
+    // Add LM commission earned by this advisor (if they are a LM for others)
+    var lmEarned=lmTot[advName]||{U:0,G:0,E:0,A:0};
+
+    // Net payable = gross net (already has bdm+lm deducted per row) + lm earned + bf - deductions
+    var netU=d.nU+lmEarned.U+n(deds.bf_U)-retainer-bdmCost-n(deds.ins)-n(deds.golf)-n(deds.oth);
+    var netG=d.nG+lmEarned.G+n(deds.bf_G);
+    var netE=d.nE+lmEarned.E+n(deds.bf_E);
+    var netA=d.nA+lmEarned.A+n(deds.bf_A);
+
+    function mc(v){
+      if(!v&&v!==0)return'<span style="color:var(--tx3);">—</span>';
+      return'<span class="mono '+(v<0?'neg':v>0?'pos':'')+'">'+( v<0?'('+fmt(Math.abs(v))+')':fmt(v))+'</span>';
+    }
+    function di(id,val,w){
+      return'<input class="ded-inp" id="'+id+'" value="'+(val||'')+'" type="number" step="any" placeholder="0" style="width:'+(w||68)+'px;" data-safe="'+safe+'" oninput="onDedChange(this)">';
+    }
+
+    // Clickable cell: click to toggle paid (green) / unpaid
+    function paidCell(netVal,paidKey,cellId){
+      if(!netVal&&netVal!==0)return'<span style="color:var(--tx3);">—</span>';
+      var paid=deds[paidKey];
+      return'<div class="paid-cell '+(paid?'is-paid':'')+'" data-safe="'+safe+'" data-key="'+paidKey+'" data-cell="'+cellId+'" onclick="togglePaid(this)" title="Click to mark '+(paid?'unpaid':'paid')+'" style="cursor:pointer;padding:4px 6px;border-radius:5px;text-align:center;'+(paid?'background:rgba(52,211,153,.2);border:1px solid rgba(52,211,153,.4);':'border:1px dashed var(--brd2);')+'"><span class="mono '+(paid?'pos':netVal<0?'neg':'pos')+'" style="font-size:12px;font-weight:600;">'+(netVal<0?'('+fmt(Math.abs(netVal))+')':fmt(netVal))+'</span>'+(paid?'<div style="font-size:9px;color:var(--greentx);margin-top:1px;">✓ Paid</div>':'<div style="font-size:9px;color:var(--tx3);margin-top:1px;">click to pay</div>')+'</div>';
+    }
+
+    html+='<tr>'
+      +'<td style="color:var(--tx3);font-size:11px;">'+(idx+1)+'</td>'
+      +'<td style="font-weight:600;">'+advName+'</td>'
+      // B/F inputs (auto-populated but editable — override for currency conversions)
+      +'<td>'+di('bf_U_'+safe,deds.bf_U,68,false)+'</td>'
+      +'<td>'+di('bf_G_'+safe,deds.bf_G,68,false)+'</td>'
+      +'<td>'+di('bf_E_'+safe,deds.bf_E,68,false)+'</td>'
+      +'<td>'+di('bf_A_'+safe,deds.bf_A,68,false)+'</td>'
+      // Gross (includes LM earned shown in brackets)
+      +'<td>'+mc(d.gU)+(lmEarned.U?'<br><span style="font-size:9px;color:var(--purptx);">+'+fmt(lmEarned.U)+' LM</span>':'')+'</td>'
+      +'<td>'+mc(d.gG)+(lmEarned.G?'<br><span style="font-size:9px;color:var(--purptx);">+'+fmt(lmEarned.G)+' LM</span>':'')+'</td>'
+      +'<td>'+mc(d.gE)+(lmEarned.E?'<br><span style="font-size:9px;color:var(--purptx);">+'+fmt(lmEarned.E)+' LM</span>':'')+'</td>'
+      +'<td>'+mc(d.gA)+(lmEarned.A?'<br><span style="font-size:9px;color:var(--purptx);">+'+fmt(lmEarned.A)+' LM</span>':'')+'</td>'
+      // Fixed deductions
+      +'<td><input class="ded-inp" id="wps_'+safe+'" type="number" step="any" placeholder="0" style="width:68px;" value="'+(deds.wps!==undefined&&deds.wps!==''?deds.wps:(retainer||''))+'" data-safe="'+safe+'" data-field="retainer" oninput="onWpsBdmChange(this)"></td>'
+      +'<td><input class="ded-inp" id="bdc_'+safe+'" type="number" step="any" placeholder="0" style="width:68px;" value="'+(deds.bdc!==undefined&&deds.bdc!==''?deds.bdc:(bdmCost||''))+'" data-safe="'+safe+'" data-field="bdmCost" oninput="onWpsBdmChange(this)"></td>'
+      // Manual deductions
+      +'<td>'+di('ins_'+safe,deds.ins)+'</td>'
+      +'<td>'+di('golf_'+safe,deds.golf)+'</td>'
+      +'<td>'+di('oth_'+safe,deds.oth)+'</td>'
+      // Net payable with paid buttons per currency
+      +'<td id="net_U_'+safe+'" style="padding:3px;">'+paidCell(netU,'paidU','net_U_'+safe)+'</td>'
+      +'<td id="net_G_'+safe+'" style="padding:3px;">'+paidCell(netG,'paidG','net_G_'+safe)+'</td>'
+      +'<td id="net_E_'+safe+'" style="padding:3px;">'+paidCell(netE,'paidE','net_E_'+safe)+'</td>'
+      +'<td id="net_A_'+safe+'" style="padding:3px;">'+paidCell(netA,'paidA','net_A_'+safe)+'</td>'
+      // Status note
+      +'<td><input class="status-inp" id="st_'+safe+'" value="'+(deds.status||'')+'" placeholder="Notes" data-safe="'+safe+'" oninput="onStatusChange(this)"></td>'
+      +'<td style="white-space:nowrap;">'
+      +'<button class="btn btn-g btn-sm" style="font-size:10px;padding:3px 7px;" data-adv="'+advName+'" onclick="exportAdvReport(this.dataset.adv,\'portrait\')">&#x1F5A8; P</button>'
+      +'<button class="btn btn-g btn-sm" style="font-size:10px;padding:3px 7px;margin-left:2px;" data-adv="'+advName+'" onclick="exportAdvReport(this.dataset.adv,\'landscape\')">&#x1F5A8; L</button>'
+      +'<button class="btn btn-p btn-sm" style="font-size:10px;padding:3px 7px;margin-left:2px;" data-adv="'+advName+'" onclick="exportAdvReportExcel(this.dataset.adv)">&#x1F4CA; XL</button>'
+      +'</td>'
+      +'</tr>';
+  });
+
+
+  html+='</tbody></table></div>';
+
+  // ── BDM PAYOUT TABLE ──
+  if(Object.keys(bdmTot).length){
+    html+='<div style="margin-top:14px;"><div style="font-size:11px;font-weight:700;color:var(--ambertx);text-transform:uppercase;letter-spacing:.07em;margin-bottom:7px;">BDM Payouts</div>'
+      +'<table class="sum-tbl" style="max-width:640px;"><thead><tr><th class="left">BDM</th><th>USD</th><th>Paid?</th><th>GBP</th><th>Paid?</th><th>EUR</th><th>Paid?</th><th>AED</th><th>Paid?</th></tr></thead><tbody>'
+      +Object.keys(bdmTot).map(function(b){
+        var t=bdmTot[b];
+        var bsafe='bdm_'+b.replace(/[^a-zA-Z0-9]/g,'_');
+        var bdeds=_sumDeds[bsafe]||{paidU:false,paidG:false,paidE:false,paidA:false};
+        if(!_sumDeds[bsafe])_sumDeds[bsafe]=bdeds;
+        function bpaid(cur,val,pk){
+          if(!val)return'<td>—</td><td></td>';
+          var paid=bdeds[pk];
+          return'<td class="mono" style="color:var(--ambertx);">'+fmt(val)+'</td>'
+            +'<td><button class="btn btn-xs '+(paid?'btn-g':'btn-p')+'" style="font-size:9px;" data-safe="'+bsafe+'" data-key="'+pk+'" onclick="togglePaid(this)">'+(paid?'✓ Paid':'Pay')+'</button></td>';
+        }
+        return'<tr><td style="font-weight:600;">'+b+'</td>'
+          +bpaid('USD',t.U,'paidU')+bpaid('GBP',t.G,'paidG')+bpaid('EUR',t.E,'paidE')+bpaid('AED',t.A,'paidA')+'</tr>';
+      }).join('')
+      +'</tbody></table></div>';
+  }
+
+  // ── LM PAYOUT TABLE (separate, showing totals) ──
+  if(Object.keys(lmTot).length){
+    html+='<div style="margin-top:14px;"><div style="font-size:11px;font-weight:700;color:var(--purptx);text-transform:uppercase;letter-spacing:.07em;margin-bottom:7px;">Line Manager Payouts (included in their row above)</div>'
+      +'<table class="sum-tbl" style="max-width:480px;"><thead><tr><th class="left">Line Manager</th><th>USD</th><th>GBP</th><th>EUR</th><th>AED</th></tr></thead><tbody>'
+      +Object.keys(lmTot).map(function(l){var t=lmTot[l];return'<tr><td style="font-weight:600;">'+l+'</td>'
+        +'<td class="mono" style="color:var(--purptx);">'+(t.U?fmt(t.U):'—')+'</td>'
+        +'<td class="mono" style="color:var(--purptx);">'+(t.G?fmt(t.G):'—')+'</td>'
+        +'<td class="mono" style="color:var(--purptx);">'+(t.E?fmt(t.E):'—')+'</td>'
+        +'<td class="mono" style="color:var(--purptx);">'+(t.A?fmt(t.A):'—')+'</td></tr>';}).join('')
+      +'</tbody></table></div>';
+  }
+
+  $('sum-content').innerHTML=html;
+  _curSumPeriod=p;
+  // Immediately update all net rows so initial calc is correct
+  advNames.forEach(function(advName){
+    var safe=advName.replace(/[^a-zA-Z0-9]/g,'_');
+    updateNetRow(safe);
+  });
+}
+
+function onWpsBdmChange(el){
+  var safe=el.dataset.safe;
+  var field=el.dataset.field; // 'retainer' or 'bdmCost'
+  var val=el.value;
+  if(!_sumDeds[safe])_sumDeds[safe]={bf_U:'',bf_G:'',bf_E:'',bf_A:'',wps:'',bdc:'',ins:'',golf:'',oth:'',status:'',paidU:false,paidG:false,paidE:false,paidA:false};
+  var key=field==='retainer'?'wps':'bdc';
+  _sumDeds[safe][key]=val;
+  updateNetRow(safe);
+  autoPersistDeds();
+}
+
+function togglePaid(el){
+  var safe=el.dataset.safe;var key=el.dataset.key;var cellId=el.dataset.cell;
+  if(!_sumDeds[safe])_sumDeds[safe]={};
+  _sumDeds[safe][key]=!_sumDeds[safe][key];
+  // Update just this cell via updateNetRow (keeps amount visible, changes colour)
+  updateNetRow(safe);
+}
+
+
+function onDedChange(el){
+  var safe=el.dataset.safe;
+  if(!_sumDeds[safe])_sumDeds[safe]={bf_U:'',bf_G:'',bf_E:'',bf_A:'',wps:'',bdc:'',ins:'',golf:'',oth:'',status:'',paidU:false,paidG:false,paidE:false,paidA:false};
+  var id=el.id.replace('_'+safe,'');
+  _sumDeds[safe][id]=el.value;
+  updateNetRow(safe);
+  autoPersistDeds();
+}
+function onStatusChange(el){
+  var safe=el.dataset.safe;
+  if(!_sumDeds[safe])_sumDeds[safe]={bf_U:0,bf_G:0,bf_E:0,bf_A:0,ins:0,golf:0,oth:0,status:''};
+  _sumDeds[safe].status=el.value;
+  var isPaid=/paid/i.test(el.value);
+  // Show/hide the paid badge next to input
+  var badge=el.nextElementSibling;
+  if(badge){badge.textContent=isPaid?'✓ B/F = 0':'';badge.style.display=isPaid?'':'none';}
+  // If paid, zero out all B/F fields for this advisor
+  if(isPaid){
+    ['bf_U','bf_G','bf_E','bf_A'].forEach(function(k){
+      var inp=$(k+'_'+safe);
+      if(inp){inp.value='';_sumDeds[safe][k]=0;}
+    });
+    updateNetRow(safe);
+  }
+}
+function updateNetRow(safe){
+  var p=_curSumPeriod;if(!p)return;
+  var pRows=p.rows||[];var is1st=p.half==='1st';
+  var byAdv=getSumByAdv(pRows);
+
+  // Also add BDM earnings to byAdv (same as renderSummary does)
+  var bdmTot2={};var lmTot2={};
+  pRows.forEach(function(r){
+    var c=calcRow(r);var cur=(r.currency||'USD')[0];
+    if(r.bdm&&r.bdm!=='—'&&c.bdmAmt){if(!bdmTot2[r.bdm])bdmTot2[r.bdm]={U:0,G:0,E:0,A:0};bdmTot2[r.bdm][cur]+=c.bdmAmt;}
+    if(r.lm&&r.lm!=='—'&&c.lmAmt){if(!lmTot2[r.lm])lmTot2[r.lm]={U:0,G:0,E:0,A:0};lmTot2[r.lm][cur]+=c.lmAmt;}
+  });
+  Object.keys(bdmTot2).forEach(function(bdmName){
+    if(!byAdv[bdmName])byAdv[bdmName]={gU:0,gG:0,gE:0,gA:0,nU:0,nG:0,nE:0,nA:0,bdmU:0,bdmG:0,bdmE:0,lmU:0,lmG:0,lmE:0};
+    var t=bdmTot2[bdmName];
+    byAdv[bdmName].nU+=t.U;byAdv[bdmName].nG+=t.G;byAdv[bdmName].nE+=t.E;byAdv[bdmName].nA+=t.A;
+  });
+
+  // Find advisor name from safe key — check all advisors, not just those with rows
+  var advName=advisors.find(function(a){return a.name.replace(/[^a-zA-Z0-9]/g,'_')===safe;});
+  advName=advName?advName.name:null;
+  // Also check BDM names
+  if(!advName)advName=Object.keys(byAdv).find(function(a){return a.replace(/[^a-zA-Z0-9]/g,'_')===safe;})||null;
+  if(!advName)return;
+
+  // Ensure byAdv has an entry (zero if no rows)
+  if(!byAdv[advName])byAdv[advName]={gU:0,gG:0,gE:0,gA:0,nU:0,nG:0,nE:0,nA:0,lmU:0,lmG:0,lmE:0};
+
+  var d=byAdv[advName];var av=getAdv(advName)||{};
+  var deds=_sumDeds[safe]||{};
+  var lmEarned=lmTot2[advName]||{U:0,G:0,E:0,A:0};
+
+  // Read from visible inputs
+  var wpsInp=$('wps_'+safe);var bdcInp=$('bdc_'+safe);
+  var wpsVal=wpsInp?n(wpsInp.value):n(deds.wps||0);
+  var bdcVal=bdcInp?n(bdcInp.value):n(deds.bdc||0);
+  var insInp=$('ins_'+safe);var golfInp=$('golf_'+safe);var othInp=$('oth_'+safe);
+  var insVal=insInp?n(insInp.value):n(deds.ins||0);
+  var golfVal=golfInp?n(golfInp.value):n(deds.golf||0);
+  var othVal=othInp?n(othInp.value):n(deds.oth||0);
+
+  // WPS on 1st half only | BDM cost deducts both halves
+  var retainer=is1st?wpsVal:0;
+  var bdmCost=bdcVal;
+  var netU=d.nU+lmEarned.U+n(deds.bf_U)-retainer-bdmCost-insVal-golfVal-othVal;
+  var netG=d.nG+lmEarned.G+n(deds.bf_G);
+  var netE=d.nE+lmEarned.E+n(deds.bf_E);
+  var netA=d.nA+lmEarned.A+n(deds.bf_A);
+
+  function updCell(cellId,val,paidKey){
+    var el=$(cellId);if(!el)return;
+    var paid=deds[paidKey];
+    var dispVal=val<0?'('+fmt(Math.abs(val))+')':fmt(val);
+    el.innerHTML='<div class="paid-cell '+(paid?'is-paid':'')+'" data-safe="'+safe+'" data-key="'+paidKey+'" data-cell="'+cellId+'" onclick="togglePaid(this)" title="Click to '+(paid?'unmark paid':'mark paid')+'" style="cursor:pointer;padding:4px 6px;border-radius:5px;text-align:center;'+(paid?'background:rgba(52,211,153,.2);border:1px solid rgba(52,211,153,.4);':'border:1px dashed var(--brd2);')+'"><span class="mono '+(paid?'pos':val<0?'neg':'pos')+'" style="font-size:12px;font-weight:600;">'+dispVal+'</span><div style="font-size:9px;'+(paid?'color:var(--greentx)':'color:var(--tx3)')+';margin-top:1px;">'+(paid?'✓ Paid':'click to pay')+'</div></div>';
+  }
+  updCell('net_U_'+safe,netU,'paidU');
+  updCell('net_G_'+safe,netG,'paidG');
+  updCell('net_E_'+safe,netE,'paidE');
+  updCell('net_A_'+safe,netA,'paidA');
+}
+
+// saveSummaryDeds defined below
+
+// ── FX CONVERTER ────────────────────────────────────────────────────────────
+function doFX(){
+  var amt=n($('fx-amt').value);var rate=n($('fx-rate').value);
+  var from=($('fx-from').value||'USD');var to=($('fx-to').value||'GBP');
+  if(!amt||!rate){toast('Enter amount and rate','err');return;}
+  var result=amt*rate;
+  $('fx-result').textContent=fmt(amt)+' '+from+' = '+fmt(result)+' '+to+' (rate: '+rate+')';
+}
+
+// ── SETTINGS ────────────────────────────────────────────────────────────────
+function addAdvisor(){
+  var rates={};BIZ_TYPES.forEach(function(bt){rates[bt]='';});
+  advisors.push({name:'New Advisor',rates:rates,lm:'—',retainer:'',bdmCost:''});
+  renderSettings();
+}
+function removeAdvisor(i){advisors.splice(i,1);renderSettings();saveSettings();}
+function setAdvRate(i,bt,val){if(!advisors[i])return;if(!advisors[i].rates)advisors[i].rates={};advisors[i].rates[bt]=val===''?'':parseFloat(val);}
+
+function renderSettings(){
+  var wrap=$('adv-settings-wrap');if(!wrap)return;
+  if(!advisors.length){wrap.innerHTML='<div class="hint">No advisors. Click + Add Advisor.</div>';return;}
+  wrap.innerHTML=advisors.map(function(a,i){
+    var rateRow=BIZ_TYPES.map(function(bt){
+      return'<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;">'
+        +'<span style="font-size:12px;color:var(--tx2);width:80px;flex-shrink:0;">'+bt+'</span>'
+        +'<input type="number" step="0.01" min="0" max="1" placeholder="e.g. 0.70" value="'+(a.rates&&a.rates[bt]!==undefined&&a.rates[bt]!==''?a.rates[bt]:'')+'" '
+        +'style="padding:5px 7px;border:1px solid var(--brd);border-radius:5px;background:var(--surf);color:var(--tx);font-size:12px;width:85px;font-family:monospace;outline:none;" '
+        +'data-idx="'+i+'" data-bt="'+bt+'" onchange="setAdvRate(parseInt(this.dataset.idx),this.dataset.bt,this.value)" oninput="setAdvRate(parseInt(this.dataset.idx),this.dataset.bt,this.value)">'
+        +'<span class="hint">cap '+(LM_CAPS[bt]||0.70)+' → LM gets remainder</span>'
+        +'</div>';
+    }).join('');
+    return'<div class="adv-set-card">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">'
+      +'<input type="text" value="'+a.name+'" data-idx="'+i+'" onchange="advisors[parseInt(this.dataset.idx)].name=this.value;" '
+      +' style="font-size:14px;font-weight:700;background:none;border:none;border-bottom:1px solid var(--brd);color:var(--tx);padding:2px 5px;width:190px;font-family:sans-serif;outline:none;">'
+      +'<button class="btn btn-red btn-xs" data-idx="'+i+'" onclick="removeAdvisor(parseInt(this.dataset.idx))">Remove</button>'
+      +'</div>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">'
+      +'<div><div style="font-size:10px;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:.07em;margin-bottom:7px;">Rates by Business Type</div>'+rateRow+'</div>'
+      +'<div><div style="font-size:10px;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:.07em;margin-bottom:7px;">Payroll Settings</div>'
+      +'<div style="margin-bottom:8px;"><label style="font-size:10px;color:var(--tx3);display:block;margin-bottom:3px;">Line Manager</label>'
+      +'<select data-idx="'+i+'" onchange="var _i=parseInt(this.dataset.idx);advisors[_i].lm=this.value;" '
+      +' style="padding:6px 8px;border:1px solid var(--brd);border-radius:var(--rs);background:var(--surf2);color:var(--tx);font-size:12px;width:155px;">'
+      +LM_LIST.map(function(l){return'<option'+(l===a.lm?' selected':'')+'>'+l+'</option>';}).join('')+'</select>'
+      +'<div class="hint" style="margin-top:3px;">% auto = cap − rate per transaction</div></div>'
+      +'<div style="margin-bottom:8px;"><label style="font-size:10px;color:var(--tx3);display:block;margin-bottom:3px;">WPS Retainer USD (1st half)</label>'
+      +'<input type="number" placeholder="blank = none" value="'+(a.retainer||'')+'" data-idx="'+i+'" oninput="advisors[parseInt(this.dataset.idx)].retainer=this.value;" '
+      +' style="padding:6px 8px;border:1px solid var(--brd);border-radius:var(--rs);background:var(--surf2);color:var(--tx);font-size:12px;width:155px;font-family:monospace;outline:none;"></div>'
+      +'<div><label style="font-size:10px;color:var(--tx3);display:block;margin-bottom:3px;">BDM Cost USD (2nd half)</label>'
+      +'<input type="number" placeholder="blank = none" value="'+(a.bdmCost||'')+'" data-idx="'+i+'" oninput="advisors[parseInt(this.dataset.idx)].bdmCost=this.value;" '
+      +' style="padding:6px 8px;border:1px solid var(--brd);border-radius:var(--rs);background:var(--surf2);color:var(--tx);font-size:12px;width:155px;font-family:monospace;outline:none;"></div>'
+      +'</div></div></div>';
+  }).join('');
+}
+
+var _saveTimer=null; // settings auto-save timer
+// saveSettings defined below
+document.addEventListener('change',function(e){if(e.target.closest('#adv-settings-wrap')){clearTimeout(_saveTimer);_saveTimer=setTimeout(saveSettings,1200);}});
+document.addEventListener('input',function(e){if(e.target.closest('#adv-settings-wrap')){clearTimeout(_saveTimer);_saveTimer=setTimeout(saveSettings,1200);}});
+
+// ── EXPORT ──────────────────────────────────────────────────────────────────
+function exportAllData(){
+  var data={
+    version:1,
+    exportedAt:new Date().toISOString(),
+    settings:window._comm.settings.getAll(),
+    periods:window._comm.periods.getAll()
+  };
+  var blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a');
+  a.href=url;
+  a.download='commission-data-'+new Date().toISOString().slice(0,10)+'.json';
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('Data exported','ok');
+}
+
+function importAllData(input){
+  var file=input.files[0];if(!file)return;
+  var reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      var data=JSON.parse(e.target.result);
+      if(!data.version||!data.settings){toast('Invalid file','err');return;}
+      if(!confirm('This will REPLACE all your current data. Continue?'))return;
+      // Import settings
+      localStorage.setItem('comm_settings_v1',JSON.stringify(data.settings));
+      // Import periods
+      if(data.periods)localStorage.setItem('comm_periods_v1',JSON.stringify(data.periods));
+      // Reload state
+      var settingsData=data.settings;
+      advisors=Array.isArray(settingsData)?settingsData:Object.values(settingsData);
+      savedPeriods=data.periods||{};
+      renderSettings();
+      renderHistory();
+      populateSumSel();
+      toast('Data imported successfully','ok');
+    }catch(err){toast('Import failed: '+err.message,'err');}
+  };
+  reader.readAsText(file);
+  input.value=''; // reset so same file can be imported again
+}
+
+function exportAdvReport(advName,orientation){
+  orientation=orientation||'portrait';
+  var p=_curSumPeriod;if(!p){toast('Load a period first','err');return;}
+  var safe=advName.replace(/[^a-zA-Z0-9]/g,'_');
+  var savedDeds=(p.deds&&p.deds[safe])||{};
+  var liveDeds=_sumDeds[safe]||{};
+  // Prefer live (typed) values, fall back to saved
+  function getDed(k){var v=liveDeds[k];if(v!==undefined&&v!=='')return v;return savedDeds[k]||'';}
+  var wpsVal=n(getDed('wps'));var bdcVal=n(getDed('bdc'));
+  var insVal=n(getDed('ins'));var golfVal=n(getDed('golf'));var othVal=n(getDed('oth'));
+  var bfU=n(getDed('bf_U'));var bfG=n(getDed('bf_G'));var bfE=n(getDed('bf_E'));var bfA=n(getDed('bf_A'));
+  var is1st=p.half==='1st';
+  var retainer=is1st?wpsVal:0;
+  var bdmCost=bdcVal;
+  var pRows=(p.rows||[]).filter(function(r){return r.advisor===advName;});
+  // Calculate BDM and LM amounts paid out from THIS advisor's rows
+  var bdmFromRows=0,lmFromRows=0;
+  pRows.forEach(function(r){var c=calcRow(r);bdmFromRows+=c.bdmAmt;lmFromRows+=c.lmAmt;});
+  var byAdv=getSumByAdv(p.rows||[]);
+  var lmTotR={};
+  (p.rows||[]).forEach(function(r){
+    var c=calcRow(r);var cur=(r.currency||'USD')[0];
+    if(r.lm&&r.lm!=='—'&&c.lmAmt){if(!lmTotR[r.lm])lmTotR[r.lm]={U:0,G:0,E:0,A:0};lmTotR[r.lm][cur]+=c.lmAmt;}
+  });
+  var d=byAdv[advName]||{gU:0,gG:0,gE:0,gA:0,nU:0,nG:0,nE:0,nA:0};
+  var lmE=lmTotR[advName]||{U:0,G:0,E:0,A:0};
+  var isLM=advisors.some(function(a){return a.lm===advName;});
+
+  // BDM rows and LM rows — must be defined before isBDM check
+  var bdmRows=(p.rows||[]).filter(function(r){return r.bdm===advName;});
+  var lmRows=(p.rows||[]).filter(function(r){return r.lm===advName;});
+
+  // For pure BDM advisors (Ziyad, Alex — no advisory rows), net commission = BDM earnings
+  var bdmTotR={U:0,G:0,E:0,A:0};
+  bdmRows.forEach(function(r){
+    var c=calcRow(r);var cur=(r.currency||'USD')[0];
+    bdmTotR[cur]+=c.bdmAmt;
+  });
+  var isBDM=bdmRows.length>0&&!pRows.length;
+  // displayN = what shows as "Net Commission" in the summary
+  var displayNu=isBDM?bdmTotR.U:d.nU;
+  var displayNG=isBDM?bdmTotR.G:d.nG;
+  var displayNE=isBDM?bdmTotR.E:d.nE;
+  var displayNA=isBDM?bdmTotR.A:d.nA;
+
+  var netU=displayNu+(isLM?lmE.U:0)+bfU-retainer-bdmCost-insVal-golfVal-othVal;
+  var netG=displayNG+(isLM?lmE.G:0)+bfG;
+  var netE=displayNE+(isLM?lmE.E:0)+bfE;
+  var netA=displayNA+(isLM?lmE.A:0)+bfA;
+
+  function fm(v){if(!v||isNaN(v)||v===0)return'-';return parseFloat(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
+  function fc(v){if(!v||isNaN(v)||v===0)return'-';return'('+fm(Math.abs(v))+')';}
+  function fnet(v){if(isNaN(v))return'-';return v<0?'('+fm(Math.abs(v))+')':fm(v);}
+  function srow(label,val,col){
+    if(!val||isNaN(n(val)))return'';
+    return'<tr><td style="padding:7px 12px;font-size:12px;color:#444;">'+label+'</td>'
+      +'<td style="padding:7px 12px;font-family:monospace;font-size:12px;text-align:right;color:'+(col||'#222')+';">'+val+'</td></tr>';
+  }
+
+  function fmtRow(r,i,showCol){
+    var c=calcRow(r);
+    var earnAmt=showCol==='bdm'?c.bdmAmt:c.lmAmt;
+    return'<tr style="background:'+(i%2?'#f9f9f9':'#fff')+'">'
+      +'<td>'+(r.date?new Date(r.date+'T00:00:00').toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}):'-')+'</td>'
+      +'<td style="font-weight:500;">'+(r.client||'-')+'</td>'
+      +'<td>'+(r.advisor||'-')+'</td>'
+      +'<td>'+(r.provider||'-')+'</td>'
+      +'<td>'+(r.bizType||'-')+'</td>'
+      +'<td style="text-align:center;font-weight:600;">'+(r.currency||'USD')+'</td>'
+      +'<td style="text-align:right;font-family:monospace;">'+fm(r.received)+'</td>'
+      +'<td style="text-align:right;font-family:monospace;color:#1a5faf;font-weight:600;">'+fm(c.gross)+'</td>'
+      +'<td style="text-align:right;font-family:monospace;font-weight:700;color:#0f8a5f;">'+fm(earnAmt)+'</td>'
+      +'</tr>';
+  }
+
+  var txnRows=pRows.map(function(r,i){
+    var c=calcRow(r);
+    return'<tr style="background:'+(i%2?'#f9f9f9':'#fff')+'">'
+      +'<td>'+(r.date?new Date(r.date+'T00:00:00').toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}):'-')+'</td>'
+      +'<td style="font-weight:500;">'+(r.client||'-')+'</td>'
+      +'<td>'+(r.provider||'-')+'</td>'
+      +'<td>'+(r.bizType||'-')+'</td>'
+      +'<td style="text-align:center;font-weight:600;">'+(r.currency||'USD')+'</td>'
+      +'<td style="text-align:right;font-family:monospace;">'+fm(r.received)+'</td>'
+      +'<td style="text-align:right;font-family:monospace;">'+(n(r.rate)*100).toFixed(0)+'%</td>'
+      +'<td style="text-align:right;font-family:monospace;font-weight:600;color:#1a5faf;">'+fm(c.gross)+'</td>'
+      +'<td style="text-align:right;font-family:monospace;color:#b86800;">'+(c.bdmAmt?fc(c.bdmAmt):'-')+'</td>'
+      +(isLM?'<td style="text-align:right;font-family:monospace;color:#4a5fa8;">'+(c.lmAmt?fm(c.lmAmt):'-')+'</td>':'')
+      +'<td style="text-align:right;font-family:monospace;font-weight:700;color:'+(c.net<0?'#c0392b':'#0f8a5f')+';">'+fnet(c.net)+'</td>'
+      +'</tr>';
+  }).join('');
+
+  var html='<!DOCTYPE html><html><head><meta charset="UTF-8"><title> </title>'
+    +'<style>'
+    +'*{box-sizing:border-box;margin:0;padding:0;}'
+    +'@page{margin:0;size:A4 '+orientation+';}'
+    +'html{-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+    +'body{font-family:Arial,sans-serif;color:#222;font-size:12px;padding:14mm 16mm;}'
+    +'table{width:100%;border-collapse:collapse;}'
+    +'th,td{padding:6px 10px;font-size:11px;}'
+    +'th{background:#1A2B45;color:#fff;text-align:left;}'
+    +'td{border-bottom:1px solid #eee;}'
+    +'</style></head><body>'
+
+    // Header
+    +'<div style="display:flex;justify-content:space-between;align-items:flex-start;padding:16px 20px 12px;border-bottom:3px solid #1A2B45;margin-bottom:16px;">'
+    +'<div><div style="font-size:18px;font-weight:700;color:#1A2B45;">Commission Statement</div>'
+    +'<div style="font-size:11px;color:#666;margin-top:3px;">'+p.label+'</div></div>'
+    +'<div style="text-align:right;"><div style="font-size:14px;font-weight:700;color:#1A2B45;">'+advName+'</div>'
+    +'<div style="font-size:10px;color:#888;margin-top:2px;">'+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'</div></div>'
+    +'</div>'
+
+    +'<div style="padding:0 20px;">'
+
+    // Summary table
+    +'<table style="margin-bottom:16px;border:1px solid #ddd;">'
+    +'<thead><tr><th style="width:60%;text-align:left;">Item</th><th style="text-align:right;">USD</th><th style="text-align:right;">GBP</th><th style="text-align:right;">EUR</th><th style="text-align:right;">AED</th></tr></thead>'
+    +'<tbody>'
+    +'<tr style="background:#f0f5ff;"><td style="color:#1a5faf;font-weight:500;">B/F from Previous Period</td><td style="text-align:right;font-family:monospace;color:#1a5faf;">'+fm(bfU)+'</td><td style="text-align:right;font-family:monospace;color:#1a5faf;">'+fm(bfG)+'</td><td style="text-align:right;font-family:monospace;color:#1a5faf;">'+fm(bfE)+'</td><td style="text-align:right;font-family:monospace;color:#1a5faf;">'+fm(bfA)+'</td></tr>'
+    +'<tr style="background:#e8f5ee;border-top:2px solid #aaa;"><td style="font-weight:700;color:#0f8a5f;">Net Commission</td><td style="text-align:right;font-family:monospace;font-weight:700;color:#0f8a5f;">'+fm(displayNu)+'</td><td style="text-align:right;font-family:monospace;color:#0f8a5f;">'+fm(displayNG)+'</td><td style="text-align:right;font-family:monospace;color:#0f8a5f;">'+fm(displayNE)+'</td><td style="text-align:right;font-family:monospace;color:#0f8a5f;">'+fm(displayNA)+'</td></tr>'
+    +(isLM&&(lmE.U||lmE.G)?'<tr style="background:#eef0ff;"><td style="color:#4a5fa8;font-weight:600;padding-left:14px;">Add: LM Commission Earned</td><td style="text-align:right;font-family:monospace;color:#4a5fa8;font-weight:600;">'+fm(lmE.U)+'</td><td style="text-align:right;font-family:monospace;color:#4a5fa8;">'+fm(lmE.G)+'</td><td style="text-align:right;font-family:monospace;color:#4a5fa8;">-</td><td style="text-align:right;font-family:monospace;color:#4a5fa8;">-</td></tr>':'')
+    +(retainer?'<tr><td style="color:#c0392b;padding-left:14px;">Less: WPS / Retainer</td><td style="text-align:right;font-family:monospace;color:#c0392b;">('+fm(retainer)+')</td><td style="text-align:right;color:#999;">-</td><td style="text-align:right;color:#999;">-</td><td style="text-align:right;color:#999;">-</td></tr>':'')
+    +(bdmCost?'<tr style="background:#fafafa;"><td style="color:#c0392b;padding-left:14px;">Less: BDM Cost</td><td style="text-align:right;font-family:monospace;color:#c0392b;">('+fm(bdmCost)+')</td><td style="text-align:right;color:#999;">-</td><td style="text-align:right;color:#999;">-</td><td style="text-align:right;color:#999;">-</td></tr>':'')
+    +(insVal?'<tr><td style="color:#c0392b;padding-left:14px;">Less: Insurance</td><td style="text-align:right;font-family:monospace;color:#c0392b;">('+fm(insVal)+')</td><td style="text-align:right;color:#999;">-</td><td style="text-align:right;color:#999;">-</td><td style="text-align:right;color:#999;">-</td></tr>':'')
+    +(golfVal?'<tr style="background:#fafafa;"><td style="color:#c0392b;padding-left:14px;">Less: Golf</td><td style="text-align:right;font-family:monospace;color:#c0392b;">('+fm(golfVal)+')</td><td style="text-align:right;color:#999;">-</td><td style="text-align:right;color:#999;">-</td><td style="text-align:right;color:#999;">-</td></tr>':'')
+    +(othVal?'<tr><td style="color:#c0392b;padding-left:14px;">Less: Others</td><td style="text-align:right;font-family:monospace;color:#c0392b;">('+fm(othVal)+')</td><td style="text-align:right;color:#999;">-</td><td style="text-align:right;color:#999;">-</td><td style="text-align:right;color:#999;">-</td></tr>':'')
+    +'<tr style="background:#1A2B45;border-top:2px solid #0d1a2e;"><td style="font-weight:700;color:#fff;font-size:13px;">Net Payable</td>'
+    +'<td style="text-align:right;font-family:monospace;font-weight:700;font-size:13px;color:'+(netU<0?'#F08080':'#5DEBB0')+';">'+fnet(netU)+'</td>'
+    +'<td style="text-align:right;font-family:monospace;font-weight:700;font-size:13px;color:'+(netG<0?'#F08080':'#5DEBB0')+';">'+fnet(netG)+'</td>'
+    +'<td style="text-align:right;font-family:monospace;font-weight:700;font-size:13px;color:'+(netE<0?'#F08080':'#5DEBB0')+';">'+fnet(netE)+'</td>'
+    +'<td style="text-align:right;font-family:monospace;font-weight:700;font-size:13px;color:'+(netA<0?'#F08080':'#5DEBB0')+';">'+fnet(netA)+'</td>'
+    +'</tr></tbody></table>'
+
+    // Transaction detail
+    +(pRows.length?
+      '<div style="font-size:10px;font-weight:700;color:#1A2B45;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Transaction Detail</div>'
+      +'<table style="border:1px solid #ddd;margin-bottom:16px;"><thead><tr>'
+      +'<th>Date</th><th>Client</th><th>Provider</th><th>Type</th><th style="text-align:center;">Ccy</th>'
+      +'<th style="text-align:right;">Received</th><th style="text-align:right;">Rate</th>'
+      +'<th style="text-align:right;color:#7DB8F0;">Gross</th>'
+      +'<th style="text-align:right;color:#FAC86A;">BDM</th>'
+      +(isLM?'<th style="text-align:right;color:#C4B5FD;">LM</th>':'')
+      +'<th style="text-align:right;color:#5DEBB0;">Net</th>'
+      +'</tr></thead><tbody>'+txnRows+'</tbody></table>'
+    :'<div style="color:#999;font-size:11px;margin-bottom:16px;">No transactions this period.</div>')
+
+    // LM Commission earned section
+    +(isLM&&lmRows.length?
+      '<div style="font-size:10px;font-weight:700;color:#4a5fa8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Line Manager Commission Earned</div>'
+      +'<table style="border:1px solid #ddd;margin-bottom:16px;"><thead><tr>'
+      +'<th>Date</th><th>Client</th><th>Advisor</th><th>Provider</th><th>Type</th><th style="text-align:center;">Ccy</th>'
+      +'<th style="text-align:right;">Received</th>'
+      +'<th style="text-align:right;">Gross</th>'
+      +'<th style="text-align:right;color:#C4B5FD;">LM Earned</th>'
+      +'</tr></thead><tbody>'
+      +lmRows.map(function(r,i){return fmtRow(r,i,'lm');}).join('')
+      +'</tbody></table>'
+    :'')
+
+    // BDM Commission earned section
+    +(bdmRows.length?
+      '<div style="font-size:10px;font-weight:700;color:#b86800;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">BDM Commission Earned</div>'
+      +'<table style="border:1px solid #ddd;margin-bottom:16px;"><thead><tr>'
+      +'<th>Date</th><th>Client</th><th>Advisor</th><th>Provider</th><th>Type</th><th style="text-align:center;">Ccy</th>'
+      +'<th style="text-align:right;">Received</th>'
+      +'<th style="text-align:right;">Gross</th>'
+      +'<th style="text-align:right;color:#FAC86A;">BDM Earned</th>'
+      +'</tr></thead><tbody>'
+      +bdmRows.map(function(r,i){return fmtRow(r,i,'bdm');}).join('')
+      +'</tbody></table>'
+    :'')
+
+    +'</div></body></html>';
+
+  var w=window.open('','_blank');
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+  w.onload=function(){w.focus();w.print();};
+  setTimeout(function(){if(w&&!w.closed){w.focus();w.print();}},800);
+}
+
+function exportExcel(){
+  if(!window.XLSX){toast('XLSX not loaded','err');return;}
+  var wb=XLSX.utils.book_new();
+  var hdr=['Date','Client','Advisor','Provider','Business Type','Currency','Received','Rate','Gross','BDM','BDM%','BDM Amount','LM','LM%','LM Amount','Net'];
+  var data=[hdr].concat(rows.map(function(r){var c=calcRow(r);return[r.date,r.client,r.advisor,r.provider,r.bizType,r.currency,n(r.received),n(r.rate),c.gross,r.bdm==='—'?'':r.bdm,n(r.bdmPct),c.bdmAmt,r.lm==='—'?'':r.lm,n(r.lmPct),c.lmAmt,c.net];}));
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(data),'Rows');
+  XLSX.writeFile(wb,'Commission_'+getPKey()+'.xlsx');toast('Downloaded','ok');
+}
+function exportSummaryExcel(){
+  var p=_curSumPeriod;if(!p){toast('Load a period first','err');return;}
+  if(!window.XLSX){toast('XLSX library not loaded','err');return;}
+  var wb=XLSX.utils.book_new();
+  var pRows=p.rows||[];var is1st=p.half==='1st';
+  var byAdv=getSumByAdv(pRows);
+  var lmTotE={};
+  pRows.forEach(function(r){
+    var c=calcRow(r);var cur=(r.currency||'USD')[0];
+    if(r.lm&&r.lm!=='—'&&c.lmAmt){if(!lmTotE[r.lm])lmTotE[r.lm]={U:0,G:0,E:0,A:0};lmTotE[r.lm][cur]+=c.lmAmt;}
+  });
+
+  // ── Sheet 1: Summary ──
+  var advNames=advisors.map(function(a){return a.name;});
+  var sumHdr=['#','Advisor','B/F USD','B/F GBP','B/F EUR','B/F AED','Net Comm USD','Net Comm GBP','Net Comm EUR','Net Comm AED','LM Earned USD','LM Earned GBP','WPS/Retainer','BDM Cost','Insurance','Golf','Others','Net Payable USD','Net Payable GBP','Net Payable EUR','Net Payable AED'];
+  var sumRows=[sumHdr];
+  advNames.forEach(function(advName,idx){
+    var safe=advName.replace(/[^a-zA-Z0-9]/g,'_');
+    var deds=_sumDeds[safe]||{};
+    var d=byAdv[advName]||{nU:0,nG:0,nE:0,nA:0};
+    var lmE=lmTotE[advName]||{U:0,G:0,E:0,A:0};
+    var isLM=advisors.some(function(a){return a.lm===advName;});
+    var ret=is1st?n(deds.wps):0;
+    var bdc=n(deds.bdc);
+    var npU=d.nU+(isLM?lmE.U:0)+n(deds.bf_U)-ret-bdc-n(deds.ins)-n(deds.golf)-n(deds.oth);
+    var npG=d.nG+(isLM?lmE.G:0)+n(deds.bf_G);
+    var npE=d.nE+(isLM?lmE.E:0)+n(deds.bf_E);
+    var npA=d.nA+(isLM?lmE.A:0)+n(deds.bf_A);
+    sumRows.push([idx+1,advName,
+      n(deds.bf_U)||0,n(deds.bf_G)||0,n(deds.bf_E)||0,n(deds.bf_A)||0,
+      d.nU||0,d.nG||0,d.nE||0,d.nA||0,
+      isLM?(lmE.U||0):0,isLM?(lmE.G||0):0,
+      ret||0,bdc||0,n(deds.ins)||0,n(deds.golf)||0,n(deds.oth)||0,
+      npU,npG,npE,npA]);
+  });
+  var sumWs=XLSX.utils.aoa_to_sheet(sumRows);
+  // Column widths
+  sumWs['!cols']=[{wch:4},{wch:22},{wch:12},{wch:10},{wch:10},{wch:10},{wch:14},{wch:12},{wch:12},{wch:12},{wch:13},{wch:11},{wch:13},{wch:11},{wch:11},{wch:10},{wch:10},{wch:15},{wch:13},{wch:13},{wch:13}];
+  XLSX.utils.book_append_sheet(wb,sumWs,'Summary');
+
+  // ── Sheet 2: Transactions ──
+  var detHdr=['Date','Client','Advisor','Provider','Type','Currency','Received','Rate %','Gross','BDM','BDM %','BDM Amt','LM','LM %','LM Amt','Net'];
+  var detRows=[detHdr];
+  pRows.forEach(function(r){
+    var c=calcRow(r);
+    detRows.push([r.date,r.client,r.advisor,r.provider,r.bizType,r.currency,
+      n(r.received),+(n(r.rate)*100).toFixed(2),
+      +c.gross.toFixed(2),
+      r.bdm==='—'?'':r.bdm,+(n(r.bdmPct)*100).toFixed(2),+c.bdmAmt.toFixed(2),
+      r.lm==='—'?'':r.lm,+(n(r.lmPct)*100).toFixed(2),+c.lmAmt.toFixed(2),
+      +c.net.toFixed(2)]);
+  });
+  var detWs=XLSX.utils.aoa_to_sheet(detRows);
+  detWs['!cols']=[{wch:12},{wch:18},{wch:18},{wch:14},{wch:10},{wch:8},{wch:12},{wch:8},{wch:12},{wch:16},{wch:8},{wch:12},{wch:16},{wch:8},{wch:12},{wch:12}];
+  XLSX.utils.book_append_sheet(wb,detWs,'Transactions');
+
+  // ── Sheet 3: LM Payouts ──
+  var lmHdr=['LM Name','USD','GBP','EUR','AED'];
+  var lmRows=[lmHdr];
+  Object.keys(lmTotE).forEach(function(lm){var e=lmTotE[lm];lmRows.push([lm,e.U||0,e.G||0,e.E||0,e.A||0]);});
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(lmRows),'LM Payouts');
+
+  XLSX.writeFile(wb,'Summary_'+p.key+'.xlsx');
+  toast('Summary Excel downloaded','ok');
+}
+
+function exportSummaryPDF(){
+  var p=_curSumPeriod;if(!p){toast('Load a period first','err');return;}
+  var el=$('sum-content');if(!el||!el.innerHTML.trim()){toast('Nothing to export','err');return;}
+  var html='<!DOCTYPE html><html><head><meta charset="UTF-8"><title> </title>'
+    +'<style>'
+    +'*{box-sizing:border-box;margin:0;padding:0;}'
+    +'@page{margin:0;size:A3 landscape;}'
+    +'html{-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+    +'body{font-family:Arial,sans-serif;font-size:10px;color:#222;padding:10mm 12mm;}'
+    +'table{width:100%;border-collapse:collapse;margin-bottom:10px;}'
+    +'th{background:#1A2B45;color:#fff;padding:5px 7px;font-size:9px;text-align:left;white-space:nowrap;}'
+    +'td{padding:4px 7px;font-size:9px;border-bottom:1px solid #eee;}'
+    +'.mono{font-family:monospace;}'
+    +'input,select,button{display:none;}'
+    +'</style></head><body>'
+    +'<div style="display:flex;justify-content:space-between;align-items:baseline;padding-bottom:8px;margin-bottom:10px;border-bottom:3px solid #1A2B45;">'
+    +'<div style="font-size:15px;font-weight:700;color:#1A2B45;">Commission Summary</div>'
+    +'<div style="font-size:11px;color:#666;">'+p.label+'&nbsp;&nbsp;|&nbsp;&nbsp;'+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'</div>'
+    +'</div>'
+    +el.innerHTML
+    +'</body></html>';
+  var w=window.open('','_blank');
+  w.document.open();w.document.write(html);w.document.close();
+  w.onload=function(){w.focus();w.print();};
+  setTimeout(function(){if(w&&!w.closed){w.focus();w.print();}},800);
+}
+
+function exportAdvReportExcel(advName){
+  var p=_curSumPeriod;if(!p){toast('Load a period first','err');return;}
+  if(!window.XLSX){toast('XLSX library not loaded','err');return;}
+  var safe=advName.replace(/[^a-zA-Z0-9]/g,'_');
+  var savedDeds=(p.deds&&p.deds[safe])||{};
+  var liveDeds=_sumDeds[safe]||{};
+  function getDed(k){var v=liveDeds[k];if(v!==undefined&&v!=='')return v;return savedDeds[k]||'';}
+  var wpsVal=n(getDed('wps'));var bdcVal=n(getDed('bdc'));
+  var insVal=n(getDed('ins'));var golfVal=n(getDed('golf'));var othVal=n(getDed('oth'));
+  var bfU=n(getDed('bf_U'));var bfG=n(getDed('bf_G'));var bfE=n(getDed('bf_E'));var bfA=n(getDed('bf_A'));
+  var is1st=p.half==='1st';
+  var retainer=is1st?wpsVal:0;var bdmCost=bdcVal;
+  // Hydrate r.lm on all rows first so filters work correctly
+  (p.rows||[]).forEach(function(r){calcRow(r);});
+  var pRows=(p.rows||[]).filter(function(r){return r.advisor===advName;});
+  var bdmRows=(p.rows||[]).filter(function(r){return r.bdm===advName;});
+  var lmRows=(p.rows||[]).filter(function(r){return r.lm===advName;});
+  var byAdv=getSumByAdv(p.rows||[]);
+  var lmTotR={};
+  (p.rows||[]).forEach(function(r){
+    var c=calcRow(r);var cur=(r.currency||'USD')[0];
+    if(r.lm&&r.lm!=='—'&&c.lmAmt){if(!lmTotR[r.lm])lmTotR[r.lm]={U:0,G:0,E:0,A:0};lmTotR[r.lm][cur]+=c.lmAmt;}
+  });
+  var d=byAdv[advName]||{gU:0,gG:0,gE:0,gA:0,nU:0,nG:0,nE:0,nA:0};
+  var lmE=lmTotR[advName]||{U:0,G:0,E:0,A:0};
+  var isLM=advisors.some(function(a){return a.lm===advName;});
+  var bdmTotAdv={U:0,G:0,E:0,A:0};
+  bdmRows.forEach(function(r){var c=calcRow(r);var cur=(r.currency||'USD')[0];bdmTotAdv[cur]+=c.bdmAmt;});
+  var isBDM=bdmRows.length>0&&!pRows.length;
+  var displayNU=isBDM?bdmTotAdv.U:d.nU;
+  var displayNG=isBDM?bdmTotAdv.G:d.nG;
+  var displayNE=isBDM?bdmTotAdv.E:d.nE;
+  var displayNA=isBDM?bdmTotAdv.A:d.nA;
+  var npU=displayNU+(isLM?lmE.U:0)+bfU-retainer-bdmCost-insVal-golfVal-othVal;
+  var npG=displayNG+(isLM?lmE.G:0)+bfG;
+  var npE=displayNE+(isLM?lmE.E:0)+bfE;
+  var npA=displayNA+(isLM?lmE.A:0)+bfA;
+
+  var wb=XLSX.utils.book_new();
+
+  // ── Sheet 1: Summary ──
+  var s=[];
+  s.push(['Commission Statement']);
+  s.push([advName]);
+  s.push([p.label,'','Prepared:',new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})]);
+  s.push(['']);
+  s.push(['Item','USD','GBP','EUR','AED']);
+  s.push(['B/F from Previous Period',bfU||0,bfG||0,bfE||0,bfA||0]);
+  s.push(['Net Commission',displayNU,displayNG,displayNE,displayNA]);
+  if(isLM&&(lmE.U||lmE.G))s.push(['Add: LM Commission Earned',lmE.U||0,lmE.G||0,0,0]);
+  if(retainer)s.push(['Less: WPS / Retainer',-retainer,0,0,0]);
+  if(bdmCost)s.push(['Less: BDM Cost',-bdmCost,0,0,0]);
+  if(insVal)s.push(['Less: Insurance',-insVal,0,0,0]);
+  if(golfVal)s.push(['Less: Golf',-golfVal,0,0,0]);
+  if(othVal)s.push(['Less: Others',-othVal,0,0,0]);
+  s.push(['Net Payable',npU,npG,npE,npA]);
+  var ws1=XLSX.utils.aoa_to_sheet(s);
+  ws1['!cols']=[{wch:28},{wch:14},{wch:12},{wch:12},{wch:12}];
+  XLSX.utils.book_append_sheet(wb,ws1,'Summary');
+
+  // ── Sheet 2: Transaction Detail — own rows, BDM rows, LM rows ──
+  var t=[['Date','Client','Advisor','Provider','Type','Currency','Received','Rate %','Gross','BDM Amt','LM Amt','Net','Role']];
+  var allRelated=[];
+  pRows.forEach(function(r){allRelated.push({r:r,role:'Advisor'});});
+  bdmRows.forEach(function(r){if(r.advisor!==advName)allRelated.push({r:r,role:'BDM'});});
+  lmRows.forEach(function(r){if(r.advisor!==advName&&r.bdm!==advName)allRelated.push({r:r,role:'LM'});});
+  allRelated.sort(function(a,b){return(a.r.date||'').localeCompare(b.r.date||'');});
+  if(allRelated.length){
+    allRelated.forEach(function(obj){
+      var r=obj.r;var c=calcRow(r);
+      t.push([r.date,r.client,r.advisor,r.provider,r.bizType,r.currency,
+        +n(r.received).toFixed(2),+(n(r.rate)*100).toFixed(2),
+        +c.gross.toFixed(2),+c.bdmAmt.toFixed(2),+c.lmAmt.toFixed(2),+c.net.toFixed(2),obj.role]);
+    });
+  } else {
+    t.push(['No transactions this period','','','','','','','','','','','','']);
+  }
+  var ws2=XLSX.utils.aoa_to_sheet(t);
+  ws2['!cols']=[{wch:12},{wch:18},{wch:18},{wch:14},{wch:10},{wch:8},{wch:12},{wch:8},{wch:12},{wch:12},{wch:12},{wch:12},{wch:10}];
+  XLSX.utils.book_append_sheet(wb,ws2,'Transactions');
+
+  // ── Sheet 3: LM Commission Earned (Colin only) ──
+  if(isLM&&lmRows.length){
+    var l=[['Date','Client','Advisor','Provider','Type','Currency','Received','Gross','LM Earned']];
+    lmRows.forEach(function(r){
+      var c=calcRow(r);
+      l.push([r.date,r.client,r.advisor,r.provider,r.bizType,r.currency,
+        +n(r.received).toFixed(2),+c.gross.toFixed(2),+c.lmAmt.toFixed(2)]);
+    });
+    var ws3=XLSX.utils.aoa_to_sheet(l);
+    ws3['!cols']=[{wch:12},{wch:18},{wch:18},{wch:14},{wch:10},{wch:8},{wch:12},{wch:12},{wch:12}];
+    XLSX.utils.book_append_sheet(wb,ws3,'LM Earned');
+  }
+
+  // ── Sheet 4: BDM Commission Earned ──
+  if(bdmRows.length){
+    var b=[['Date','Client','Advisor','Provider','Type','Currency','Received','Gross','BDM Earned']];
+    bdmRows.forEach(function(r){
+      var c=calcRow(r);
+      b.push([r.date,r.client,r.advisor,r.provider,r.bizType,r.currency,
+        +n(r.received).toFixed(2),+c.gross.toFixed(2),+c.bdmAmt.toFixed(2)]);
+    });
+    var ws4=XLSX.utils.aoa_to_sheet(b);
+    ws4['!cols']=[{wch:12},{wch:18},{wch:18},{wch:14},{wch:10},{wch:8},{wch:12},{wch:12},{wch:12}];
+    XLSX.utils.book_append_sheet(wb,ws4,'BDM Earned');
+  }
+
+  var fname=advName.replace(/[^a-zA-Z0-9]/g,'_')+'_'+p.key+'.xlsx';
+  XLSX.writeFile(wb,fname);
+  toast(advName+' Excel downloaded','ok');
+}
+
+function exportReportExcel(){
+  var pKey=$('rpt-period').value;
+  var advFilter=$('rpt-advisor').value;
+  if(!pKey){toast('Select a period first','err');return;}
+  if(!window.XLSX){toast('XLSX library not loaded','err');return;}
+  var p=savedPeriods[pKey];if(!p)return;
+  var pRows=p.rows||[];var is1st=p.half==='1st';
+  var byAdv=getSumByAdv(pRows);
+  var lmTotR2={};
+  pRows.forEach(function(r){
+    var c=calcRow(r);var cur=(r.currency||'USD')[0];
+    if(r.lm&&r.lm!=='—'&&c.lmAmt){if(!lmTotR2[r.lm])lmTotR2[r.lm]={U:0,G:0,E:0,A:0};lmTotR2[r.lm][cur]+=c.lmAmt;}
+  });
+  var wb=XLSX.utils.book_new();
+  var targetAdvs=advFilter?[advFilter]:advisors.map(function(a){return a.name;});
+
+  targetAdvs.forEach(function(advName){
+    var safe=advName.replace(/[^a-zA-Z0-9]/g,'_');
+    var deds=_sumDeds[safe]||{};
+    var d=byAdv[advName]||{gU:0,gG:0,gE:0,gA:0,nU:0,nG:0,nE:0,nA:0};
+    var lmE=lmTotR2[advName]||{U:0,G:0,E:0,A:0};
+    var isLM=advisors.some(function(a){return a.lm===advName;});
+    var advRows=pRows.filter(function(r){return r.advisor===advName;});
+    var bdmRows=pRows.filter(function(r){return r.bdm===advName;});
+    var lmRows=pRows.filter(function(r){return r.lm===advName;});
+    var bdmTotAdv={U:0,G:0,E:0,A:0};
+    bdmRows.forEach(function(r){var c=calcRow(r);var cur=(r.currency||'USD')[0];bdmTotAdv[cur]+=c.bdmAmt;});
+    var isBDM=bdmRows.length>0&&!advRows.length;
+    var displayNU=isBDM?bdmTotAdv.U:d.nU;
+    var ret=is1st?n(deds.wps):0;var bdc=n(deds.bdc);
+    var npU=displayNU+(isLM?lmE.U:0)+n(deds.bf_U)-ret-bdc-n(deds.ins)-n(deds.golf)-n(deds.oth);
+    var npG=(isBDM?bdmTotAdv.G:d.nG)+(isLM?lmE.G:0)+n(deds.bf_G);
+
+    // Summary block
+    var sheetData=[
+      ['Commission Statement — '+advName],
+      [p.label],[''],
+      ['Item','USD','GBP','EUR','AED'],
+      ['B/F from Previous Period',n(deds.bf_U)||0,n(deds.bf_G)||0,n(deds.bf_E)||0,n(deds.bf_A)||0],
+      ['Net Commission',displayNU,isBDM?bdmTotAdv.G:d.nG,isBDM?bdmTotAdv.E:d.nE,isBDM?bdmTotAdv.A:d.nA],
+    ];
+    if(isLM&&(lmE.U||lmE.G))sheetData.push(['Add: LM Commission Earned',lmE.U||0,lmE.G||0,0,0]);
+    if(ret)sheetData.push(['Less: WPS / Retainer',-ret,0,0,0]);
+    if(bdc)sheetData.push(['Less: BDM Cost',-bdc,0,0,0]);
+    if(n(deds.ins))sheetData.push(['Less: Insurance',-n(deds.ins),0,0,0]);
+    if(n(deds.golf))sheetData.push(['Less: Golf',-n(deds.golf),0,0,0]);
+    if(n(deds.oth))sheetData.push(['Less: Others',-n(deds.oth),0,0,0]);
+    sheetData.push(['Net Payable',npU,npG,0,0]);
+    sheetData.push(['']);
+
+    // Transaction detail
+    if(advRows.length){
+      sheetData.push(['TRANSACTION DETAIL']);
+      sheetData.push(['Date','Client','Provider','Type','Currency','Received','Rate %','Gross','BDM Amt','LM Amt','Net']);
+      advRows.forEach(function(r){
+        var c=calcRow(r);
+        sheetData.push([r.date,r.client,r.provider,r.bizType,r.currency,
+          +n(r.received).toFixed(2),+(n(r.rate)*100).toFixed(2),
+          +c.gross.toFixed(2),+c.bdmAmt.toFixed(2),+c.lmAmt.toFixed(2),+c.net.toFixed(2)]);
+      });
+      sheetData.push(['']);
+    }
+
+    // LM earned detail
+    if(isLM&&lmRows.length){
+      sheetData.push(['LM COMMISSION EARNED']);
+      sheetData.push(['Date','Client','Advisor','Provider','Type','Currency','Gross','LM Earned']);
+      lmRows.forEach(function(r){var c=calcRow(r);sheetData.push([r.date,r.client,r.advisor,r.provider,r.bizType,r.currency,+c.gross.toFixed(2),+c.lmAmt.toFixed(2)]);});
+      sheetData.push(['']);
+    }
+
+    // BDM earned detail
+    if(bdmRows.length){
+      sheetData.push(['BDM COMMISSION EARNED']);
+      sheetData.push(['Date','Client','Advisor','Provider','Type','Currency','Gross','BDM Earned']);
+      bdmRows.forEach(function(r){var c=calcRow(r);sheetData.push([r.date,r.client,r.advisor,r.provider,r.bizType,r.currency,+c.gross.toFixed(2),+c.bdmAmt.toFixed(2)]);});
+    }
+
+    var ws=XLSX.utils.aoa_to_sheet(sheetData);
+    ws['!cols']=[{wch:28},{wch:14},{wch:12},{wch:12},{wch:12}];
+    // Sheet name max 31 chars, strip special chars
+    var sheetName=advName.replace(/[^a-zA-Z0-9 ]/g,'').substring(0,31);
+    XLSX.utils.book_append_sheet(wb,ws,sheetName);
+  });
+
+  var fname=(advFilter?advFilter.replace(/[^a-zA-Z0-9]/g,'_'):'All_Advisors')+'_'+p.key+'.xlsx';
+  XLSX.writeFile(wb,fname);
+  toast('Report Excel downloaded','ok');
+}
+
+// ── AUTH FUNCTIONS ────────────────────────────────────────────────────────────
+function doLogin(){
+  var email=$('login-email').value.trim();
+  var pass=$('login-pass').value;
+  var btn=$('login-btn');
+  var err=$('login-err');
+  if(!email||!pass){showLoginErr('Please enter email and password.');return;}
+  btn.textContent='Signing in…';btn.disabled=true;err.style.display='none';
+  _auth.signInWithEmailAndPassword(email,pass)
+    .catch(function(e){
+      btn.textContent='Sign In';btn.disabled=false;
+      var msg=e.code==='auth/wrong-password'||e.code==='auth/invalid-credential'?'Incorrect password.'
+             :e.code==='auth/user-not-found'?'No account found for this email.'
+             :e.code==='auth/invalid-email'?'Invalid email address.'
+             :'Login failed: '+e.message;
+      showLoginErr(msg);
+    });
+}
+function showLoginErr(msg){var e=$('login-err');e.textContent=msg;e.style.display='block';}
+function doReset(){
+  var email=$('login-email').value.trim();
+  if(!email){showLoginErr('Enter your email above first.');return;}
+  _auth.sendPasswordResetEmail(email)
+    .then(function(){showLoginErr('✓ Reset email sent — check your inbox.');$('login-err').style.color='#0f8a5f';})
+    .catch(function(e){showLoginErr('Error: '+e.message);});
+}
+function doLogout(){_auth.signOut();}
+
+// ── BOOT ─────────────────────────────────────────────────────────────────────
+window.addEventListener('load',function(){
+  // Show login screen, hide app until auth resolves
+  $('connecting').style.display='none';
+  $('login-screen').style.display='flex';
+
+  _auth.onAuthStateChanged(async function(user){
+    if(!user){
+      // Not logged in — show login screen
+      $('login-screen').style.display='flex';
+      $('app').style.display='none';
+      var btn=$('login-btn');if(btn){btn.textContent='Sign In';btn.disabled=false;}
+      return;
+    }
+
+    // ── Logged in ──
+    window._currentUser=user;
+    window._isAdmin=(user.email.toLowerCase()===ADMIN_EMAIL.toLowerCase());
+
+    // Match to advisor name by email stored in Firestore users collection
+    window._advisorName=null;
+    if(!window._isAdmin){
+      try{
+        var usnap=await _db.collection('users').doc(user.uid).get();
+        if(usnap.exists&&usnap.data().advisorName){
+          window._advisorName=usnap.data().advisorName;
+        }
+      }catch(e){}
+    }
+
+    // Update sidebar user info
+    var dispName=window._isAdmin?'Admin':( window._advisorName||user.email.split('@')[0]);
+    var sbName=$('sb-user-name');var sbEmail=$('sb-user-email');
+    if(sbName)sbName.textContent=dispName;
+    if(sbEmail)sbEmail.textContent=user.email;
+
+    // Show/hide admin-only nav items
+    document.querySelectorAll('.admin-only').forEach(function(el){
+      el.style.display=window._isAdmin?'':'none';
+    });
+
+    // Hide login, show app
+    $('login-screen').style.display='none';
+    $('app').style.display='flex';
+
+    // Load data from Firestore
+    try{
+      var settingsData=await window._comm.settings.getAll();
+      if(!settingsData){
+        advisors=DEFAULT_ADVISORS;
+        if(window._isAdmin)await window._comm.settings.setVal(advisors);
+      } else {
+        var loaded=Array.isArray(settingsData)?settingsData:Object.values(settingsData);
+        advisors=loaded.map(function(a){
+          var def=DEFAULT_ADVISORS.find(function(d){return d.name===a.name;})||{};
+          var merged=Object.assign({lm:'—',retainer:'',bdmCost:''},def,a);
+          if(!merged.lm||merged.lm===''||merged.lm==='—'||merged.lm==='\u2014'){
+            if(def.lm&&def.lm!=='—'&&def.lm!=='\u2014'&&def.lm.trim()!==''){merged.lm=def.lm;}
+          }
+          return merged;
+        });
+        if(window._isAdmin)await window._comm.settings.setVal(advisors);
+      }
+    }catch(e){advisors=DEFAULT_ADVISORS;}
+
+    try{
+      var periodsData=await window._comm.periods.getAll();
+      savedPeriods=periodsData||{};
+    }catch(e){savedPeriods={};}
+
+    // For advisors — go straight to report tab, pre-filter to their name
+    if(!window._isAdmin){
+      V('report');
+      // Pre-select their name in the advisor filter once initReport runs
+      setTimeout(function(){
+        var asel=$('rpt-advisor');
+        if(asel&&window._advisorName){
+          for(var i=0;i<asel.options.length;i++){
+            if(asel.options[i].value===window._advisorName){asel.selectedIndex=i;break;}
+          }
+          renderReport();
+        }
+      },300);
+    } else {
+      renderRows();
+    }
+  });
+});
+
+// Save helpers that update in-memory state then localStorage
+var _origSavePeriod=null;
+async function savePeriod(){
+  var key=getPKey();
+  var data={key:key,label:getPLabel(),half:periodHalf,month:$('p-month').value,year:$('p-year').value,rows:rows,savedAt:new Date().toISOString()};
+  await window._comm.periods.save(key,data);
+  savedPeriods[key]=data;
+  toast('Period saved! Click "New Period" in History to start the next half.','ok');
+}
+async function deletePeriod(key){
+  if(!confirm('Delete?'))return;
+  await window._comm.periods.del(key);
+  delete savedPeriods[key];
+  renderHistory();
+  toast('Deleted','ok');
+}
+async function saveSettings(){
+  await window._comm.settings.setVal(advisors);
+  toast('Settings saved','ok');
+}
+var _dedTimer=null;
+function autoPersistDeds(){
+  // Auto-save deds to period 1.5s after any change — no manual save needed
+  clearTimeout(_dedTimer);
+  _dedTimer=setTimeout(function(){
+    var p=_curSumPeriod;if(!p)return;
+    p.deds=JSON.parse(JSON.stringify(_sumDeds));
+    window._comm.periods.save(p.key,p).then(function(){
+      savedPeriods[p.key]=p;
+    });
+  },1500);
+}
+
+async function saveSummaryDeds(){
+  var p=_curSumPeriod;if(!p){toast('Load a period first','err');return;}
+  p.deds=_sumDeds;
+  await window._comm.periods.save(p.key,p);
+  savedPeriods[p.key]=p;
+  toast('Saved','ok');
+}
+</script>
+</body>
+</html>

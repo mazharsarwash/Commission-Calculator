@@ -1,0 +1,15 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // All reads/writes to these collections go through the verified API.
+    match /staffAccess/{id} { allow read, write: if false; }
+    match /protectedCompanies/{id} { allow read, write: if false; }
+    match /protectedVisas/{id} { allow read, write: if false; }
+    match /protectedFiles/{id} { allow read, write: if false; }
+    match /clientInvitations/{id} { allow read, write: if false; }
+    match /clientSubmissions/{id} { allow read, write: if false; }
+    match /staffCosts/{id} { allow read, write: if false; }
+    match /staffAppraisals/{id} { allow read, write: if false; }
+    match /staffBillingBasis/{id} { allow read, write: if false; }
+  }
+}

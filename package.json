@@ -1,0 +1,1 @@
+{"name":"taxportal-protected-records","private":true,"main":"index.cjs","engines":{"node":"22"},"dependencies":{"express":"^4.21.2","firebase-admin":"^13.0.0","firebase-functions":"^6.0.0"}}

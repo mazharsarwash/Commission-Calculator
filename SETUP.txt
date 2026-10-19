@@ -1,0 +1,60 @@
+PROTECTED RECORDS SETUP — REQUIRED BEFORE LIVE UPLOADS / CLIENT LINKS / APPRAISAL SAVES
+
+The static portal is ready to call this service. Its configuration is intentionally empty. Uploading the HTML files does not deploy this service or secure the existing Realtime Database.
+
+What is protected by this service
+- Company-linked visa records and identity-document copies.
+- Client invitations and completed onboarding answers.
+- Staff costs, invoice appraisal bases and appraisal notes.
+- Staff sign-in uses Firebase Authentication and an explicit server-side staffAccess mapping. The old portal usernames/passwords are not trusted by this service.
+- Advisor access is assigned-record only; supervisor access covers operational records; financial endpoints require the manager role.
+- Invitation secrets are random, stored only as hashes, expire, can be revoked and accept one submission. Client tokens never grant access to other records.
+
+Before deployment
+1. Have the Firebase project owner review the service. Use the existing project if appropriate; check whether Firestore / Storage already contain other applications' data.
+2. Enable Firebase Authentication Email/Password, create the staff accounts you want to use and set NEW passwords. Do not reuse passwords from the legacy client-side login. No automatic invitations or emails are sent by this package.
+3. Create a Firestore database and a PRIVATE Cloud Storage bucket. Review storage retention and remove abandoned invitation files periodically. The package does not create retention schedules.
+4. Confirm the required Firebase/Google Cloud billing plan and costs before enabling paid services or deploying functions. Nothing here automatically upgrades a billing plan.
+5. Install the Firebase CLI and Node.js 22 locally. Sign in to the correct Firebase project. In secure-backend/functions run npm install.
+6. In secure-backend/functions create .env with:
+   ALLOWED_ORIGINS=https://mazharsarwash.github.io,https://mazhar-taxportal-replica.mazharsarwash598363.chatgpt.site
+   PROTECTED_BUCKET=the-exact-private-bucket-name
+   Add any future custom frontend origin explicitly, without a trailing slash. No wildcard origin is enabled.
+7. Review and merge firestore.rules and storage.rules with existing rules. Do not blindly replace rules used by another app. Remove broad overlapping public allow rules for the protected collections and portal-protected prefix: Firebase allow rules combine, so a more general allow can defeat a specific deny. The bucket's IAM/ACL must also be private, with no allUsers access.
+8. Deploy only the intended rules and the portal-protected functions codebase using your normal Firebase deployment process. The exported HTTP function is portalApi in europe-west2. Note its exact HTTPS URL from the deployment result.
+
+Staff access mappings
+Create staffAccess/{Firebase Auth UID} documents in the Firestore console, or use functions/bootstrap-staff.cjs with Application Default Credentials and a JSON array on stdin. Each record needs:
+  name: the staff display name
+  role: manager, supervisor or advisor
+  legacyAdvisorId: the existing advisor/login record ID in your portal
+  enabled: true
+  readOnly: false (or true for view-only)
+
+For Mazhar use manager; Keerthana uses supervisor; the other staff use advisor. Copy the correct existing IDs from your own database; do not guess IDs. The bootstrap script requires the Auth user to exist already, never creates a password and never prints credentials. Do not upload service-account keys into the repository or browser files.
+
+Frontend configuration
+Edit secure-config.js only after deployment:
+  apiBase: the exact portalApi HTTPS URL
+  authApiKey: your Firebase project's Web API key
+  clientFormBase: https://mazharsarwash.github.io/Commission-Calculator/onboarding.html
+The Web API key is public configuration, not an admin credential. Never place a service-account key in this file. Upload the updated secure-config.js with the other static app files.
+
+Use the portal's Protected sign-in button with the NEW staff email/password. A manager or supervisor registers a company when adding a visa person or generating an invitation. Existing protected company assignments are not silently overwritten by data from the legacy register. Change protected company assignments deliberately in the secure database if needed.
+
+Release checks
+- An unauthenticated request to /visas or financial endpoints must be denied.
+- An advisor must not read another advisor's records.
+- A supervisor must receive 403 on /staff-costs, /staff-appraisals and /billing-basis.
+- A removed/disabled staffAccess account must stop working even with an old ID token.
+- A client link must stop working after submission, expiry or revocation.
+- Raw Firestore and Storage client reads must be denied; unsigned object downloads must fail.
+- Test uploads with non-sensitive sample PDF/JPG/PNG files, including rejected oversized / mismatched-type files.
+- Verify that the client form is publicly reachable on GitHub Pages. The private Sites preview is not a public client invitation destination.
+- Confirm period totals and all invoice VAT bases before using the appraisal calculator.
+
+Existing portal limitation
+The original Realtime Database and client-side login are separate from this service. Their security gap is NOT fixed by these rules. The monthly accounting register still uses that existing shared database. A full migration of the legacy data/login and closure of its public rules is a separate required security task. Do not assume private isolation for legacy records until that migration is complete.
+
+Operational limits
+Current protected listing limits are 1,000 operational records and 2,000 finance records per response. Finance listings fail closed if the window is exceeded; implement pagination before exceeding these limits. Each client invitation allows up to 10 files, 5 MB per file. Abandoned invitation uploads must be cleaned up under your retention policy.

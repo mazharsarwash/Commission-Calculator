@@ -17,7 +17,7 @@ V=function(section){
  if(curView!=='fees')return;
  curView='proposals';document.getElementById('view-fees').style.display='none';document.getElementById('nv-fees').classList.remove('active');document.getElementById('ttitle').textContent='Proposals';document.getElementById('add-btn').style.display='none';document.getElementById('sec-btn').style.display='none';
  view.style.display='';nav.classList.add('active');
- if(!frame){frame=document.createElement('iframe');frame.title='Proposal Studio and History';frame.style.cssText='display:block;width:100%;height:calc(100vh - 125px);min-height:720px;border:0';frame.src='proposal-studio/proposal-builder.html?embedded=1';view.append(frame);}else sendClients();
+ if(!frame){frame=document.createElement('iframe');frame.title='Proposal Studio and History';frame.style.cssText='display:block;width:100%;height:calc(100vh - 125px);min-height:720px;border:0';frame.src='proposal-builder.html?embedded=1';view.append(frame);}else sendClients();
 };
 const originalEnter=enterDB;enterDB=function(){const result=originalEnter.apply(this,arguments);nav.style.display=isM()?'':'none';return result;};
 const originalLogout=doLogout;doLogout=function(){frame?.remove();frame=undefined;view.style.display='none';nav.style.display='none';return originalLogout.apply(this,arguments);};

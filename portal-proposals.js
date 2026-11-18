@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 const nav=document.createElement('div'),view=document.createElement('div');
-nav.id='nv-proposals';nav.className='ni';nav.textContent='Proposals';nav.tabIndex=0;nav.setAttribute('role','button');nav.style.display='none';
+nav.id='nv-proposals';nav.className='ni';nav.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8m-8 4h8"/></svg>Proposals';nav.tabIndex=0;nav.setAttribute('role','button');nav.style.display='none';
 view.id='view-proposals';view.style.display='none';document.getElementById('nv-fees').after(nav);document.getElementById('view-fees').after(view);
 let frame;
 function sendClients(){
